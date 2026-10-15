@@ -1,5 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:workers";
+import { runInDurableObject } from "cloudflare:test";
 import { exportJWK, generateKeyPair, SignJWT, jwtVerify } from "jose";
 import { RpcTarget, newWebSocketRpcSession } from "capnweb";
 import schema from "../migrations/0001_mikaki_auth.sql?raw";
@@ -116,14 +117,13 @@ describe("Mikaki RP", () => {
   it("creates an app-owned profile in its separate DO namespace without an email", async () => {
     const name = await mikakiUserName(issuer, crypto.randomUUID());
     const user = env.TEST_USER.getByName(name);
-    let rejected: unknown;
-    try { await user.authenticateFromMikaki(name, false); } catch (error) { rejected = error; }
-    expect(String(rejected)).toContain("disabled");
-    await user.authenticateFromMikaki(name, true);
-    expect(await user.whoami()).toMatchObject({ id: name, name: "Mikaki user", type: "user" });
-    await user.setOwnDisplayName("Owner");
-    await user.authenticateFromMikaki(name, false);
-    expect((await user.whoami()).name).toBe("Owner");
+    const inDo = <T>(f: (instance: UserDurableObject) => Promise<T>) => runInDurableObject(user, f);
+    await expect(inDo(u => u.authenticateFromMikaki(name, false))).rejects.toThrow("disabled");
+    await inDo(u => u.authenticateFromMikaki(name, true));
+    expect(await inDo(u => u.whoami())).toMatchObject({ id: name, name: "Mikaki user", type: "user" });
+    await inDo(u => u.setOwnDisplayName("Owner"));
+    await inDo(u => u.authenticateFromMikaki(name, false));
+    expect((await inDo(u => u.whoami())).name).toBe("Owner");
   });
   it("creates a browser-bound, single-use session without email or browser-readable OIDC tokens", async () => {
     const login = await signedIn();
