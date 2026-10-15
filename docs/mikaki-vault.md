@@ -18,10 +18,11 @@ reasoning, attachment bytes, tool/operation logs, generated files and runtime
 state. Limits are 200 messages and 24,000 serialized UTF-8 bytes; excess fails
 rather than truncating. Each deliberate save adds a snapshot; it is not sync.
 
-The apps retain independent sessions. This does not replace the Workshop's
-email-keyed authentication gatekeepers with Mikaki OIDC or merge accounts.
-Later SSO needs issuer/subject identity and linking rules. This save does not
-change the server/AI plaintext boundary into live E2EE.
+The apps retain independent sessions. Deployments can optionally use
+[direct Mikaki sign-in](mikaki-auth.md), which identifies the app user by issuer
+and pairwise subject without merging existing email-keyed accounts. Signing in
+does not unlock the Vault. This save does not change the server/AI plaintext
+boundary into live E2EE.
 
 Cloudflare OS keeps chat/history in its workspace Overseer DO and code in that
 DO's Git object store. Gadget runtime state is separate DO storage. Context

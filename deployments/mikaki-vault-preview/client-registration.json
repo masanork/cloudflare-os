@@ -1,0 +1,16 @@
+{
+  "client_id": "817accd9-e56b-40c9-88d4-3b5aebd0a580",
+  "sector_identifier": "vault-20261015-router.masanork.workers.dev",
+  "redirect_uris": [
+    "https://vault-20261015-router.masanork.workers.dev/api/auth/mikaki/callback"
+  ],
+  "key": {
+    "kid": "cfos-vault-20261015",
+    "jwk": {
+      "kty": "EC",
+      "x": "rO3UNiAIAU4mTQBWlb7BeksNF_tj4JbYgm6XuT5jsFE",
+      "y": "f1OvCN8L5a9vDCWo8CdnTCdviUV52SMDInZlqixx3iM",
+      "crv": "P-256"
+    }
+  }
+}
