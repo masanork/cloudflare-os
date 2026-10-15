@@ -83,6 +83,7 @@ type UseSurface = "getMetadata" | "subscribeToMetadata" | "subscribeToPresence" 
 
 const DENIED_OVERSEER: Record<Exclude<keyof Overseer, keyof RpcTarget | UseSurface>,
     (ws: RpcStub<Overseer>) => unknown> = {
+  exportWorkspaceSnapshot: ws => ws.exportWorkspaceSnapshot("https://os.example"),
   setTitle: ws => ws.setTitle("Title"),
   deleteSelf: ws => ws.deleteSelf(),
   createGadget: ws => ws.createGadget("App"),

@@ -456,6 +456,8 @@ export type DeviceSessionHandoffStart = {
 
 /** Top-level API exposed to the user after they have authenticated. */
 export interface AuthenticatedApi extends RpcTarget {
+  /** Restore a portable snapshot into a fresh workspace; an operation ID binds exact retries. */
+  newGadgetFromWorkspaceSnapshot(snapshot: string, operationId: string): Promise<string>;
   /** Get profile info for the user who is logged in. */
   whoami(): Promise<AiChatAuthorInfo>;
 
@@ -2439,6 +2441,8 @@ export type AgentSpawnerConfig = {
  * createGadget()/getGadget()).
  */
 export interface Overseer extends RpcTarget {
+  /** Owner-only, bounded business-data snapshot with isolated gadget SQL/KV copies. */
+  exportWorkspaceSnapshot(origin: string): Promise<string>;
   /** Get metadata describing this workspace. */
   getMetadata(): Promise<GadgetMetadata>;
 
