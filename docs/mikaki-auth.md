@@ -23,6 +23,21 @@ The public registration for the Vault staging instance is in
 `deployments/mikaki-vault-preview/client-registration.json`. Its private key is
 only a backend Worker secret, never in this repository or the frontend bundle.
 
+The staging installation's canonical origin is `https://cfos.mikaki.org`. Its
+back-channel URL is `https://cfos.mikaki.org/api/auth/mikaki/backchannel-logout`.
+The October 2026 domain migration retains the existing client ID, signing key,
+pairwise subject and application storage. Its dedicated sector namespace moves
+with that subject; it must not be regenerated as a new identity. The internal
+Context Library `sharingDomain` remains its original namespace so existing
+collections stay accessible. Browser cookies are host-only, so the new origin
+requires sign-in again.
+
+For legacy page links, set the router's optional `PUBLIC_BASE_URL` to the same
+canonical origin and enable `assets.run_worker_first=true` on that installation.
+GET/HEAD page requests redirect temporarily with their path and query intact.
+API and connector callbacks and POST requests retain their original handlers,
+so callback credentials are never replayed across origins by this redirect.
+
 Backend bindings/variables:
 
 | Name | Value |

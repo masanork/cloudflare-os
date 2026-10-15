@@ -16,6 +16,8 @@ export interface Env {
   WORKSHOP_BACKEND: Fetcher;
   /** Present in production (wrangler.jsonc assets stanza); absent in dev. */
   ASSETS?: Fetcher;
+  /** Optional canonical origin for browser pages; API and connector requests keep their origin. */
+  PUBLIC_BASE_URL?: string;
   /** Dormant until custom domains + Email Routing exist; the handler ships anyway. */
   GATEKEEPER_EMAIL?: Service<EmailEntrypoint>;
   [key: string]: unknown;
@@ -43,6 +45,18 @@ export default {
     // Note: gatekeeper OAuth redirects land on the gatekeeper Workers themselves, at
     // `/gatekeeper/<name>/oauth` (handled by the loop above) — there are no backend /auth
     // callbacks.
+
+    if (env.PUBLIC_BASE_URL && (req.method === "GET" || req.method === "HEAD")) {
+      const canonical = new URL(env.PUBLIC_BASE_URL);
+      if (canonical.protocol !== "https:" || canonical.origin !== env.PUBLIC_BASE_URL) {
+        return new Response("Invalid public origin", { status: 503 });
+      }
+      if (url.origin !== canonical.origin) {
+        url.protocol = canonical.protocol;
+        url.host = canonical.host;
+        return Response.redirect(url.href, 307);
+      }
+    }
 
     if (env.ASSETS) {
       return env.ASSETS.fetch(req);
