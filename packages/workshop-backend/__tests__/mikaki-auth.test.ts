@@ -2,7 +2,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { exportJWK, generateKeyPair, SignJWT, jwtVerify } from "jose";
-import { RpcTarget, newWebSocketRpcSession } from "capnweb";
+import { RpcTarget, RpcStub, newWebSocketRpcSession } from "capnweb";
 import schema from "../migrations/0001_mikaki_auth.sql?raw";
 import { currentMikakiSession, handleMikakiAuth, mikakiUserName } from "../src/auth/mikaki";
 import { newMikakiRpcSession } from "../src/auth/mikaki-rpc";
@@ -244,6 +244,30 @@ describe("Mikaki RP", () => {
       expect(await client.ping()).toBe("ok");
       await new Promise(resolve => setTimeout(resolve, 130));
       await expect(client.ping()).rejects.toThrow();
+    } finally { client[Symbol.dispose](); server[Symbol.dispose](); }
+  });
+
+  it("preserves callback message order while outbound authorization is pending", async () => {
+    class Callback extends RpcTarget { async read() { return "ok"; } }
+    class Main extends RpcTarget {
+      async call(callback: RpcStub<Callback>) {
+        using ownedCallback = callback;
+        return await ownedCallback.read();
+      }
+    }
+    const pair = new WebSocketPair(); pair[0].accept(); pair[1].accept();
+    let firstSend = true;
+    const server = newMikakiRpcSession(pair[0], new Main(), async touch => {
+      if (!touch && firstSend) {
+        firstSend = false;
+        await new Promise(resolve => setTimeout(resolve, 30));
+      }
+      return Date.now() + 60_000;
+    });
+    const client = newWebSocketRpcSession<Main>(pair[1]);
+    try {
+      expect(await client.call(new Callback())).toBe("ok");
+      expect(await client.call(new Callback())).toBe("ok");
     } finally { client[Symbol.dispose](); server[Symbol.dispose](); }
   });
 
