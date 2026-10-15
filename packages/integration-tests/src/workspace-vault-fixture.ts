@@ -49,6 +49,7 @@ export async function startWorkspaceVaultFixture(origin: string) {
     assert.ok(token);
     const api = await publicApi.authenticate(token);
     held.push(api);
+    await api.completeOnboarding();
     const otherApi = await signUp(publicApi, otherUsername);
     held.push(otherApi);
     const ws = await api.newGadgetFromBlueprint(blueprintId, {});
