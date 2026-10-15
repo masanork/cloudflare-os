@@ -44,7 +44,8 @@ The same URL setting enables the owner's **Workspace in Vault** section above
 the chat pane, including in a workspace with no selected conversation. Expand
 it to use **Save workspace to Vault** or **Restore workspace from Vault**. Save uses owner-only `Overseer.exportWorkspaceSnapshot(origin)`.
 It captures supervisor chat/history, attachment bytes, Git code/history and
-permanent gadget metadata, then reads each gadget's SQL/KV from a private frozen
+permanent gadget metadata, durably journals every planned clone name, rechecks
+the supervisor state, then reads each gadget's SQL/KV from a private frozen
 facet clone. No archived gadget code runs during inspection. The source keeps
 running; supervisor changes during capture refuse that attempt. Each facet is
 individually frozen, without claiming a transaction across all application DOs.
@@ -59,6 +60,11 @@ marks are retained. Runtime bookkeeping tables are excluded. Finish
 agents/actions and queued agent calls and commit proposed changes first;
 provisional gadgets/bindings and current or deleted private worktrees refuse
 export until a separate private-worktree contract exists.
+Spawned/callable agent chat scopes also refuse export until their frozen
+capabilities have a separate portable contract. Callback history is retained
+without bindings to omitted argument capabilities. SQL import refuses
+data-producing table DDL and appended statements before staging writes; normal
+trigger bodies, CASE expressions and quoted semicolons remain supported.
 
 Workspaces marked `containsRestrictedData` or `ownerInvitesOnly` refuse export,
 including when either flag changes during capture. The raw historical
