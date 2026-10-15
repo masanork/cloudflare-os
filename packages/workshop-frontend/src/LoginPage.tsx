@@ -11,6 +11,8 @@ import { useConnectionLost } from './RpcContext'
 import OAuthButtons from './components/auth/OAuthButtons'
 import SiteLogo from './components/SiteLogo'
 import { deviceSessionSearch } from './features/native-app/DeviceSessionHandoff'
+import { MIKAKI_AUTH_MODE } from './features/auth/mikakiSession'
+import { MikakiSignInPage } from './features/auth/MikakiSignInPage'
 
 
 interface LoginPageProps {
@@ -18,7 +20,11 @@ interface LoginPageProps {
   onLoginSuccess?: () => void
 }
 
-export default function LoginPage({ rpcStub, onLoginSuccess }: LoginPageProps) {
+export default function LoginPage(props: LoginPageProps) {
+  return MIKAKI_AUTH_MODE ? <MikakiSignInPage /> : <LegacyLoginPage {...props} />
+}
+
+const LegacyLoginPage = ({ rpcStub, onLoginSuccess }: LoginPageProps) => {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
