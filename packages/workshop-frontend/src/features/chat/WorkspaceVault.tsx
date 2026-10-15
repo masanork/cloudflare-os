@@ -107,7 +107,29 @@ export const WorkspaceVault = ({
           <Button variant="secondary" size="sm" disabled={busy} onClick={() => void run("restore")}>
             {retry ? "Retry the same restore" : "Restore workspace from Vault"}
           </Button>
+          {retry && (
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                pending.current = null;
+                setRetry(false);
+                setStatus(
+                  "Pending restore discarded. If the earlier request completed, its workspace remains in your workspace list. You can now choose another snapshot.",
+                );
+              }}
+            >
+              Discard pending restore
+            </Button>
+          )}
         </div>
+        {retry && (
+          <p className="text-xs text-kumo-subtle">
+            Retry safely repeats the same restore. Before discarding it, check your workspace list
+            in case the earlier request completed.
+          </p>
+        )}
         <p className="text-xs text-kumo-subtle">
           Up to 2 MiB of conversations, attachments, code history and gadget SQL/KV data. Finish
           agents and commit changes first. External connections and sharing must be configured
