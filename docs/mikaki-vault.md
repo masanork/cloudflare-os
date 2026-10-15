@@ -126,3 +126,35 @@ pnpm exec vitest run __tests__/workspace-vault.test.ts
 The RPC test also checks caller-scoped operation IDs, exact/changed retries and
 another user's lack of access. Real devices, the complete hosted frontend,
 account linking and popup policy still need deployed qualification.
+
+## Complete local Workshop UI qualification
+
+Mikaki's optional `MIKAKI_CLOUDFLARE_OS_UI=1` browser scenario also loads this
+checkout's complete production React bundle. Build it with the exact test Vault
+destination before running the paired scenario:
+
+```sh
+VITE_MIKAKI_VAULT_URL=https://mikaki.test/vault \
+  pnpm exec vp run -F @gadgets/workshop-frontend build
+pnpm exec vp run -F @gadgets/integration-tests build:test-gatekeeper
+cd /path/to/mikaki
+MIKAKI_CLOUDFLARE_OS_SOURCE=/path/to/cloudflare-os \
+MIKAKI_CLOUDFLARE_OS_RPC=1 MIKAKI_CLOUDFLARE_OS_UI=1 \
+  node --expose-gc --test local/conformance/vault-owner-workspace-browser.test.ts
+```
+
+The test serves the unmodified production assets on the local backend's origin.
+The real Workshop buttons talk directly to the authenticated WebSocket API in
+the browser; no replacement controls or exposed RPC callbacks drive this part.
+It exercises reviewed encrypted save, selecting a same-origin snapshot,
+restore into a new workspace, navigation and reload. A new RPC session checks
+registration, output indexing, chat/attachment data and writable gadget SQL/KV,
+and verifies that the source workspace is unchanged and another user is refused.
+The Workshop account/session and Mikaki's login/Passkey PRF remain test fixtures.
+
+A hosted preview additionally needs its own target account/Workers subdomain,
+an Access application that covers its router origin (`CF_ACCESS_AUD` and
+`CF_ACCESS_ISS`), and a deployed Mikaki `/vault` destination. The existing
+`pnpm preview:deploy --dry-run` checks the preview inputs before deployment.
+Do not reuse an unrelated live instance's storage for this qualification. Real
+login, physical Passkeys and hosted popup/session policies remain outstanding.
