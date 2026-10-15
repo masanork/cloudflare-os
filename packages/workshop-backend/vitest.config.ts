@@ -89,6 +89,7 @@ export default defineConfig({
         workerLoaders: { LOADER: {} },
         // Where a blueprint's content is published to and read back from.
         r2Buckets: ['BLUEPRINT_CONTENT'],
+        d1Databases: { MIKAKI_AUTH_DB: 'mikaki-rp-test' },
         durableObjects: {
           TEST_OVERSEER: { className: 'OverseerDurableObject', useSQLite: true },
           TEST_USER: { className: 'UserDurableObject', useSQLite: true },

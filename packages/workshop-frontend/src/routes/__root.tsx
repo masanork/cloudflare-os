@@ -6,6 +6,7 @@ import { RpcStub } from 'capnweb'
 import { AuthenticatedApi } from '@gadgets/workshop-shared/api'
 import { useRpcStub, useConnectionLost } from '../RpcContext'
 import { useAuth, CF_ACCESS_MODE } from '../useAuth'
+import { MIKAKI_AUTH_MODE } from '../features/auth/mikakiSession'
 import { AuthProvider } from '../AuthContext'
 import { HANDOFF_PATH } from '../connectHandoff'
 import { FeatureFlagsProvider } from '../FeatureFlagsContext'
@@ -32,7 +33,7 @@ function RootComponent() {
   const pathname = useRouterState({ select: (s) => s.location.pathname })
 
   // Routes that don't require auth (public routes)
-  const isSignup = pathname === '/signup'
+  const isSignup = pathname === '/signup' && !MIKAKI_AUTH_MODE
   const isBlueprint = pathname.startsWith('/blueprint/')
   // The connect / sign-in handoff popup needs no shell and must not wait on auth: a sign-in popup
   // has no session, and ConnectHandoffPage runs its own useAuth for connects.

@@ -280,6 +280,16 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     return isNew;
   }
 
+  /** Initialize a separately namespaced OIDC identity without manufacturing an email address. */
+  async authenticateFromMikaki(userName: string, allowCreate: boolean): Promise<void> {
+    if (!this.storage.created.get()) {
+      if (!allowCreate) throw new Error("New sign-ups are currently disabled on this deployment.");
+      this.storage.created.put(true);
+      this.storage.profile.put({ type: "user", name: "Mikaki user", id: userName });
+    }
+    this.#syncDirectory();
+  }
+
   async #newSessionToken(options: { expiresAt?: Date; pendingUntil?: Date } = {}): Promise<string> {
     let { secret, hash: tokenId } = await newSecretToken();
     this.storage.sessions.put({ tokenId, created: new Date(), ...options });

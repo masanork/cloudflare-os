@@ -2,8 +2,9 @@ import { useState, useEffect, useRef } from 'react'
 import { RpcStub } from 'capnweb'
 import { PublicApi, AuthenticatedApi } from '@gadgets/workshop-shared/api'
 import { setReportedUserId } from './errorReporting'
+import { MIKAKI_AUTH_MODE, loadMikakiSession, endMikakiSession } from './features/auth/mikakiSession'
 
-const CF_ACCESS_MODE = import.meta.env.VITE_CF_ACCESS_MODE === 'true'
+const CF_ACCESS_MODE = !MIKAKI_AUTH_MODE && import.meta.env.VITE_CF_ACCESS_MODE === 'true'
 
 interface AuthState {
   token: string | null
@@ -56,7 +57,29 @@ export function useAuth(publicApi: RpcStub<PublicApi>) {
   }, [authState.authenticatedApi])
 
   useEffect(() => {
-    if (CF_ACCESS_MODE) {
+    if (MIKAKI_AUTH_MODE) {
+      const controller = new AbortController()
+      let pendingApi: RpcStub<AuthenticatedApi> | null = null
+      setAuthState(prev => ({ ...prev, authenticatedApi: null, isLoading: true, error: null }))
+      loadMikakiSession(false, controller.signal).then(async result => {
+        if (controller.signal.aborted) return
+        if (!result.signedIn) {
+          setAuthState({ token: null, authenticatedApi: null, isLoading: false, error: null })
+          return
+        }
+        pendingApi = publicApi.authenticateFromMikaki()
+        await pendingApi.whoami()
+        if (!controller.signal.aborted) {
+          setAuthState({ token: null, authenticatedApi: pendingApi, isLoading: false, error: null })
+        }
+      }).catch(() => {
+        if (!controller.signal.aborted) {
+          pendingApi?.[Symbol.dispose]()
+          setAuthState({ token: null, authenticatedApi: null, isLoading: false, error: null })
+        }
+      })
+      return () => { controller.abort(); pendingApi?.[Symbol.dispose]() }
+    } else if (CF_ACCESS_MODE) {
       authenticateWithCfAccess()
     } else {
       const storedToken = localStorage.getItem('authToken')
@@ -124,6 +147,16 @@ export function useAuth(publicApi: RpcStub<PublicApi>) {
 
   const logout = () => {
     setReportedUserId(undefined)
+
+    if (MIKAKI_AUTH_MODE) {
+      authenticatedApiRef.current?.[Symbol.dispose]()
+      setAuthState({ token: null, authenticatedApi: null, isLoading: true, error: null })
+      endMikakiSession().then(() => window.location.assign('/')).catch((error: unknown) => {
+        setAuthState({ token: null, authenticatedApi: null, isLoading: false,
+          error: error instanceof Error ? error.message : 'Could not sign out.' })
+      })
+      return
+    }
 
     if (CF_ACCESS_MODE) {
       window.location.assign('/cdn-cgi/access/logout')

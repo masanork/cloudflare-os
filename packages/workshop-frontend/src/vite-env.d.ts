@@ -11,6 +11,8 @@ interface ImportMetaEnv {
 
   // Optional exact Mikaki /vault destination for reviewed browser transfers.
   readonly VITE_MIKAKI_VAULT_URL?: string;
+  // Use the installation's HttpOnly Mikaki OIDC session, without localStorage credentials.
+  readonly VITE_MIKAKI_AUTH_MODE?: string;
 }
 
 interface ImportMeta {

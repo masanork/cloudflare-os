@@ -1,0 +1,93 @@
+# Sign in to Cloudflare OS with Mikaki
+
+This optional deployment mode uses Mikaki directly as an OIDC provider. The
+installation shows **Mikakiでログイン**, then returns to the original application
+path after Passkey sign-in and connection review. **アカウントを選ぶ** requests
+Mikaki's account-selection screen. App logout removes only this installation's
+session and returns to the sign-in button; it does not immediately start SSO.
+
+Vault custody remains a separate operation. Configure the existing
+`VITE_MIKAKI_VAULT_URL` for reviewed workspace saves/restores. Signing in neither
+unlocks the Vault nor gives Cloudflare OS its keys.
+
+## Configure an installation
+
+Use an installation-specific confidential client and ES256 signing key. Register
+its public key and exact callback with the Mikaki operator, and register its
+Back-Channel Logout URL:
+
+- Callback: `https://<installation>/api/auth/mikaki/callback`
+- Back-Channel Logout: `https://<installation>/api/auth/mikaki/backchannel-logout`
+
+The public registration for the Vault staging instance is in
+`deployments/mikaki-vault-preview/client-registration.json`. Its private key is
+only a backend Worker secret, never in this repository or the frontend bundle.
+
+Backend bindings/variables:
+
+| Name | Value |
+| --- | --- |
+| `PUBLIC_BASE_URL` | Exact HTTPS origin, without trailing slash |
+| `MIKAKI_ISSUER` | Exact HTTPS Mikaki issuer, normally `https://auth.mikaki.org` |
+| `MIKAKI_CLIENT_ID` | Registered client ID |
+| `MIKAKI_PRIVATE_JWK` | Secret: registered P-256 private JWK with `kid` |
+| `MIKAKI_AUTH_DB` | Dedicated RP D1, with `migrations/0001_mikaki_auth.sql` applied |
+| `MIKAKI_ALLOWED_SUBJECTS` | JSON array of explicitly admitted pairwise subjects; unset/empty admits nobody |
+| `ADMINS` | Existing admin-name array, using `mikakiUserName(issuer, sub)` for an admitted admin |
+
+Do not bind the issuer's D1 as `MIKAKI_AUTH_DB`. This database holds only this
+app's login transactions, hashed app sessions and logout tombstones. Expired
+records are pruned when a new login starts. Do not configure `CF_ACCESS_AUD` or
+`CF_ACCESS_ISS` in this mode. Remove any Access gate on the installation origin
+only after the RP is configured and deployed, so the OP can deliver logout.
+Keep the backend private behind its router service binding.
+
+Build the frontend with `VITE_MIKAKI_AUTH_MODE=true`,
+`VITE_CF_ACCESS_MODE=false` and, for Vault, the existing Vault URL flag. Vite's
+build cache already fingerprints `VITE_*` values. Default builds retain the
+existing password/gatekeeper/Access deployment behavior. The native app's
+device-session handoff is explicitly unavailable in this first web-only mode.
+
+## Identity and session boundaries
+
+The app uses `mikaki-<SHA256(JSON([issuer, sub]))>` as its own user name. The
+hyphenated namespace cannot be registered by the legacy password username
+validator. No email is requested or invented, and no existing email-keyed
+account is merged. Display names start as `Mikaki user` and are set during
+onboarding. Admitting a subject and granting an app role are deployment
+operations, independent of authenticating successfully with Mikaki.
+
+Only the configured issuer's `/authorize`, `/token`, `/jwks` and `/session/check`
+endpoints are used. Browser-bound state, nonce, PKCE S256 and one-time callback
+consumption protect each login. The server uses ES256 `private_key_jwt` with a
+fresh assertion for every token exchange and session check. It pins token
+algorithm, purpose, issuer, audience, authorized party, time and nonce, then
+confirms the SID/subject/authentication time before creating a session.
+
+Browser cookies are host-only, Secure, HttpOnly and SameSite=Lax. The RP never
+returns ID/access tokens, client assertions or private keys to frontend code or
+localStorage. State/CSRF failure and cancellation have a clean retry link.
+
+Every inbound and outbound WebSocket RPC message checks the primary RP session
+store, including calls on previously returned workspace capabilities. Timers
+renew the issuer lease without extending the application's idle deadline;
+revocation, expired idle time or failed renewal closes the connection. The
+socket cannot keep authority after its lease expires. Logout atomically records
+an SID tombstone and deletes its sessions, including when delivery precedes the
+callback. No retained authenticated capability can bypass the connection guard.
+
+## Verification
+
+```sh
+pnpm --filter @gadgets/workshop-backend exec vitest run __tests__/mikaki-auth.test.ts
+pnpm --filter @gadgets/workshop-frontend exec vitest run src/features/auth/mikakiSession.test.tsx src/useAuth.test.tsx
+MIKAKI_SOURCE=/path/to/built/mikaki pnpm exec node --test scripts/mikaki-oidc-journey.test.mjs
+pnpm lint
+```
+
+The opt-in interoperability test uses an actual Rust Mikaki Worker, isolated
+D1 databases and a Chromium virtual Passkey. It validates enrollment, first
+connection review, real code exchange/ID Token/SID checks, callback replay and
+OP-side revocation. It does not access a hosted account or a real Passkey.
+Hosted owner sign-in, AI model setup and the subsequent Vault save/restore
+still need an owner-driven browser check; deployment is not evidence of that.

@@ -6,6 +6,8 @@ import type { UiFeatureFlags } from "@gadgets/workshop-shared/feature-flags";
 import { getServerConfig } from "./deployment-config.js";
 import { isPasswordAuthEnabled, getAuthGatekeeperAllowlist } from "./auth/config.js";
 import { getAuthVendorBinding } from "./auth/auth-vendors.js";
+import { currentMikakiSession, handleMikakiAuth, mikakiUserName, type MikakiSession } from "./auth/mikaki.js";
+import { newMikakiRpcSession } from "./auth/mikaki-rpc.js";
 import { getUsageInfo } from "./ai-gateway-billing/limits/usage-checker.js";
 import { listConnectedAccounts, selectAccount } from "./ai-gateway-billing/cloudflare/connection-service.js";
 import { PendingLogin, LoginConnectCallbackImpl, EXPIRED_MESSAGE } from "./auth/login-flow.js";
@@ -147,6 +149,9 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     return retryOnDoReset(() => this.#user.whoami());
   }
   async beginDeviceSessionHandoff(publicKey: string, state: string) {
+    if (this.env.MIKAKI_ISSUER) {
+      throw new Error("Mikaki sign-in currently supports the web application only.");
+    }
     if (this.accessSession?.expiresAt !== undefined &&
         this.accessSession.expiresAt <= Date.now()) {
       throw new Error("The Access session has expired. Sign in again before connecting the app.");
@@ -719,7 +724,8 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
 
   constructor(private ctx: ExecutionContext, private env: Env,
       private abortSession: (reason: Error) => void,
-      private accessSession?: { payload: JWTPayload; jwt: string }) {
+      private accessSession?: { payload: JWTPayload; jwt: string },
+      private mikakiSession?: MikakiSession) {
     super();
     this.users = this.ctx.exports.UserDurableObject;
   }
@@ -732,6 +738,7 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
 
   async startGatekeeperLogin(vendorId: string)
       : Promise<{ url: string; nonce: string; attempt: RpcStub<LoginAttempt> }> {
+    if (this.env.MIKAKI_ISSUER) throw new Error("This installation requires Mikaki sign-in.");
     if (!getAuthGatekeeperAllowlist(this.env).includes(vendorId)) {
       throw new Error(`Sign-in via "${vendorId}" is not enabled on this deployment.`);
     }
@@ -775,6 +782,7 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
   }
 
   async authenticate(token: string): Promise<AuthenticatedApi> {
+    if (this.env.MIKAKI_ISSUER) throw new Error("This installation requires Mikaki sign-in.");
     let split = token.split(':');
     if (split.length !== 2) {
       throw createAuthError(AUTH_ERROR_CODES.invalidSessionToken);
@@ -814,6 +822,17 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
     });
     return new AuthenticatedApiImpl(this.ctx, this.env, userId, this.abortSession,
         { jwt: this.accessSession.jwt, expiresAt: (this.accessSession.payload.exp ?? 0) * 1000 });
+  }
+
+  async authenticateFromMikaki(): Promise<AuthenticatedApi> {
+    if (!this.mikakiSession || !this.env.MIKAKI_ISSUER) {
+      throw new Error("Sign in with Mikaki to continue.");
+    }
+    const name = await mikakiUserName(this.env.MIKAKI_ISSUER, this.mikakiSession.sub);
+    const userId = this.users.idFromName(name);
+    await this.users.get(userId).authenticateFromMikaki(name,
+        (await readAdminConfig(this.env)).signupsEnabled);
+    return new AuthenticatedApiImpl(this.ctx, this.env, userId, this.abortSession);
   }
 
   async login(username: string, passwordHash: Uint8Array): Promise<string | null> {
@@ -893,6 +912,12 @@ export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext) {
     let url = new URL(req.url);
 
+    if (url.pathname.startsWith("/api/auth/mikaki/")) return handleMikakiAuth(req, env);
+
+    if (env.MIKAKI_ISSUER && url.pathname === "/api/device-session/callback") {
+      return new Response("Native device sign-in is unavailable in Mikaki mode.", { status: 403 });
+    }
+
     if (url.pathname === SITE_LOGO_PATH) {
       return serveSiteLogo(req, env.BLUEPRINT_CONTENT);
     }
@@ -959,6 +984,15 @@ export default {
       }
 
       let accessSession: { payload: JWTPayload; jwt: string } | undefined;
+      let mikakiSession: MikakiSession | null = null;
+
+      if (env.MIKAKI_ISSUER) {
+        if (req.headers.get("Origin") !== env.PUBLIC_BASE_URL || url.origin !== env.PUBLIC_BASE_URL) {
+          return new Response("Cross-origin API access not allowed.", { status: 403 });
+        }
+        try { mikakiSession = await currentMikakiSession(req, env); }
+        catch { return new Response("Sign in with Mikaki again.", { status: 401 }); }
+      }
 
       if (env.CF_ACCESS_AUD) {
         if (req.headers.get("Origin") !== url.origin) {
@@ -988,8 +1022,13 @@ export default {
       };
 
       return await newWorkersRpcResponse(req,
-          new PublicApiImpl(ctx, env, abortSession, accessSession),
-          { abortSignal: abortController.signal });
+          new PublicApiImpl(ctx, env, abortSession, accessSession, mikakiSession ?? undefined),
+          { abortSignal: abortController.signal,
+            authorize: mikakiSession ? async (touch: boolean) => {
+              const session = await currentMikakiSession(req, env, touch);
+              if (!session) throw new Error("Your Mikaki session has ended. Please sign in again.");
+              return Math.min(session.lease_until, session.idle_expires_at, session.parent_expires_at) * 1000;
+            } : undefined });
     }
 
     return new Response("Not Found", {status: 404});
@@ -1004,6 +1043,8 @@ export default {
 type ExtendedRpcSessionOptions = RpcSessionOptions & {
   // Abort WebSocket sessions when this AbortSignal is aborted. (No effect on HTTP batch sessions.)
   abortSignal: AbortSignal;
+  // Check the RP cookie even for messages targeting capabilities returned earlier in this socket.
+  authorize?: (touch: boolean) => Promise<number>;
 };
 
 // Clone of newWorkersRpcResponse() from Cap'n Web, except the `options` has been extended with
@@ -1034,7 +1075,9 @@ function newWorkersWebSocketRpcResponse(
   let pair = new WebSocketPair();
   let server = pair[0];
   server.accept()
-  let stub = newWebSocketRpcSession(server, localMain, options);
+  let stub = options?.authorize
+    ? newMikakiRpcSession(server, localMain, options.authorize, options)
+    : newWebSocketRpcSession(server, localMain, options);
 
   // -- ADDED FOR GADGETS --
   if (options?.abortSignal) {

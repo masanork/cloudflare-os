@@ -36,6 +36,9 @@ wrangler.dev.jsonc
 # Scratch output from scripts/preview (the PR-preview comment body).
 /output/
 
+# Synthetic Mikaki interoperability screenshots.
+/artifacts/mikaki-oidc/
+
 # macOS
 .DS_Store
 

@@ -84,6 +84,7 @@ export default defineConfig(({ mode }) => {
       port: 3000,
       host: true,
       proxy: {
+        '/api/auth/mikaki': `http://${backendHost}`,
         '/api/client-errors': `http://${backendHost}`,
         '/api/device-session/callback': `http://${backendHost}`,
         '/blueprint-screenshot': `http://${backendHost}`,
