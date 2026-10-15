@@ -8,6 +8,9 @@ interface ImportMetaEnv {
   // In this mode, password-based login/signup is disabled and the app authenticates
   // via the CF Access JWT that Access injects into requests before they reach the server.
   readonly VITE_CF_ACCESS_MODE?: string;
+
+  // Optional exact Mikaki /vault destination for reviewed browser transfers.
+  readonly VITE_MIKAKI_VAULT_URL?: string;
 }
 
 interface ImportMeta {

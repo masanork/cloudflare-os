@@ -115,6 +115,7 @@ import { copyToClipboard } from "./clipboard";
 import { isImeComposing } from "./keyboardEvent";
 import { formatAttachmentSize } from "./features/chat/attachmentFormatting";
 import { ChatComposer } from "./features/chat/composer/ChatComposer";
+import { SaveConversationToVault } from "./features/chat/SaveConversationToVault";
 import { composerDraftStorageKey } from "./features/chat/composer/draft/composerDraft";
 import {
   findUnresolvedConflicts, listConflictedFiles, type UnresolvedConflict,
@@ -5631,6 +5632,9 @@ function ChatInterface({
                 </div>
               )}
 
+              {workspaceId && currentChatMetadata && <SaveConversationToVault
+                key={`${workspaceId}:${selectedChatId}`} reader={overseer} workspaceId={workspaceId}
+                chatId={selectedChatId} title={currentChatMetadata.title || "Chat"} />}
               {/* Messages */}
               <div
                 ref={messagesContainerRef}
