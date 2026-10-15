@@ -110,6 +110,9 @@ export interface PublicApi extends RpcTarget {
    */
   authenticateFromCfAccess(): Promise<AuthenticatedApi>;
 
+  /** Authenticate with this installation's HttpOnly Mikaki RP session cookie. */
+  authenticateFromMikaki(): Promise<AuthenticatedApi>;
+
   /**
    * Login with username and password.
    *

@@ -69,6 +69,14 @@ declare global {
       CF_ACCESS_AUD?: string;   // audience
       CF_ACCESS_ISS?: string;   // team URL, e.g. https://<team>.cloudflareaccess.com
 
+      // Optional direct Mikaki OIDC RP. Mutually exclusive with Cloudflare Access mode.
+      MIKAKI_ISSUER?: string;
+      MIKAKI_CLIENT_ID?: string;
+      MIKAKI_PRIVATE_JWK?: string;
+      MIKAKI_AUTH_DB?: D1Database;
+      // Explicit issuer-scoped pairwise subjects allowed into this installation (JSON array).
+      MIKAKI_ALLOWED_SUBJECTS?: string;
+
       // Comma-separated allowlist of gatekeeper vendor ids permitted to drive sign-in (e.g.
       // "google,github,cloudflare"). A listed gatekeeper must also advertise providesAuth. Empty =
       // no gatekeeper sign-in (password / CF Access only).

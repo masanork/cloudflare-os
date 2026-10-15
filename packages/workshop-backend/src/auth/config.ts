@@ -28,6 +28,7 @@ export function hasAuthGatekeepers(env: Cloudflare.Env): boolean {
  * auth gatekeeper is allowlisted, otherwise we'd lock everyone out, so password auth stays on.
  */
 export function isPasswordAuthEnabled(env: Cloudflare.Env): boolean {
+  if (env.MIKAKI_ISSUER) return false;
   if (env.DISABLE_PASSWORD_AUTH !== "true") return true;
   return !hasAuthGatekeepers(env);
 }
