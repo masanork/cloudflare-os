@@ -1,3 +1,4 @@
+import { WorkspaceVault } from "./features/chat/WorkspaceVault";
 import { useState, useEffect, useCallback, useMemo, useRef, type PointerEvent as ReactPointerEvent } from 'react'
 import { useParams, useNavigate, useSearch, Link } from '@tanstack/react-router'
 import { DropdownMenu, useKumoToastManager } from '@cloudflare/kumo'
@@ -1861,8 +1862,9 @@ export default function GadgetEditor() {
         >
           {overseer ? (
             <div className="flex-1 min-h-0 relative">
-              <div className={layoutModeReady ? 'h-full' : 'h-full invisible'}>
-                <ChatInterface
+              <div className={layoutModeReady ? 'h-full flex flex-col' : 'h-full flex flex-col invisible'}>
+                {!metadata.owner && <WorkspaceVault key={id} reader={overseer.stub} />}
+                <div className="flex-1 min-h-0"><ChatInterface
                   key={id}
                   workspaceId={id}
                   overseer={overseer.stub}
@@ -1895,7 +1897,7 @@ export default function GadgetEditor() {
                   onSelectedChatProposedChangesChange={setSelectedChatProposedWorkpieces}
                   onOpenGadget={handleSelectWorkpiece}
                   outputOfWorkpiece={outputOfWorkpiece}
-                />
+                /></div>
               </div>
 
               {!layoutModeReady && (
