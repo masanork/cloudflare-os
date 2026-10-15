@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "exports": {
+    "./workspace-snapshot": "./src/workspace-snapshot.ts",
     "./api": {
       "types": "./src/api.ts",
       "import": "./src/api.ts"

@@ -74,4 +74,5 @@ export const migrations: DurableObjectMigration[] = [
   // login back to the waiting browser.
   { tag: "v2", new_sqlite_classes: ["PendingLogin"] },
   { tag: "v3", new_sqlite_classes: ["UserDirectoryDurableObject"] },
+  { tag: "v4", new_sqlite_classes: ["WorkspaceStorageInspector"] },
 ];

@@ -74,6 +74,7 @@ import { normalizeAgentCatalog } from "./agent-catalog";
 import { refreshCachedBalance } from "./ai-gateway-billing/cloudflare/connection-service";
 import { SharingManager, SharingCaller, roleRank } from "./sharing";
 import { AutoApprovalDrainer, autoApprovalRule } from "./auto-approval";
+import { exportWorkspaceSnapshot, restoreWorkspaceSnapshot } from "./workspace-snapshot";
 import { collectSlashCommands, invokeSlashCommand } from "./slash-commands";
 import { createWorkshopLogger, obsContext } from "./observability";
 import { traceAgentTurn, traceToolApproval } from "./agent-tracing";
@@ -9426,6 +9427,19 @@ type OverseerRestoreParams = {
 
 export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
   private impl: OverseerImpl;
+  private workspaceRestoreBusy = false;
+
+  /** Private broker ingress: restore only into an unowned workspace, before exposing its client. */
+  async restoreWorkspaceSnapshotForOwner(ownerId: string, snapshot: string): Promise<void> {
+    if (this.workspaceRestoreBusy) throw new Error('Restore is already in progress.');
+    this.workspaceRestoreBusy = true;
+    try {
+      await restoreWorkspaceSnapshot(this.ctx, this.impl.storage, ownerId, snapshot);
+      this.impl.ownerId = ownerId;
+      this.impl.defaultGadgetId = this.impl.storage.defaultGadgetId.get();
+      migrateToBlueprintUpstreams(this.impl);
+    } finally { this.workspaceRestoreBusy = false; }
+  }
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
@@ -10310,6 +10324,11 @@ function joinSessionPresence(
 
 @validateRpc()
 class OverseerClientInterface extends RpcTarget implements Overseer {
+  /** Export is narrower than ordinary collaborator read access. */
+  async exportWorkspaceSnapshot(origin: string): Promise<string> {
+    if (!this.isOwner) throw new Error('Only the workspace owner can export its state.');
+    return exportWorkspaceSnapshot(this.impl.ctx, this.impl.storage, origin);
+  }
   #clientProfilePromise: Promise<AiChatAuthorInfo> | undefined;
 
   constructor(private impl: OverseerImpl,
@@ -11958,6 +11977,9 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
 // whether "use" callers may invoke it.
 @validateRpc()
 class UseOverseerInterface extends RpcTarget implements Overseer {
+  async exportWorkspaceSnapshot(_origin: string): Promise<string> {
+    return this.#deny();
+  }
   constructor(private impl: OverseerImpl,
               private clientProfileId: string,
               private clientUserId: string,

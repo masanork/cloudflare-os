@@ -31,6 +31,7 @@ import { verifyCfAccessJwt } from "./access.js";
 import { resolveUiFeatureFlags } from "./feature-flags";
 import { serveSiteLogo, SITE_LOGO_PATH } from "./site-logo.js";
 import { createWorkshopLogger } from "./observability";
+import { parseWorkspaceSnapshot } from '@gadgets/workshop-shared/workspace-snapshot';
 import { retryOnDoReset, wrapDoStubForTelemetry } from "./do-retry";
 import { deviceSessionCallback } from "./auth/device-session-callback.js";
 
@@ -61,6 +62,7 @@ export { UserDirectoryDurableObject };
 
 // Re-export entrypoint types from user.ts.
 export { UserDurableObject, GatekeeperConnectCallbackImpl };
+export { WorkspaceStorageInspector } from './workspace-storage';
 
 // Re-export entrypoint types from overseer.ts.
 export { OverseerDurableObject, GatekeeperLoopback, GatekeeperHookLoopback,
@@ -347,6 +349,22 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
       throw new Error("Open failed despite newly-created workspace?");
     }
     return result;
+  }
+
+  /** Allocate a caller-bound fresh restore target; identical retries reuse its saved receipt. */
+  async newGadgetFromWorkspaceSnapshot(snapshot: string, operationId: string): Promise<string> {
+    const parsed = parseWorkspaceSnapshot(snapshot);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(operationId)) throw new Error('Invalid restore operation.');
+    const id = this.overseers.idFromName(`vault-restore:${this.#userId}:${operationId}`);
+    const target = this.overseers.get(id);
+    await target.restoreWorkspaceSnapshotForOwner(this.#userId.toString(), snapshot);
+    await this.#user.ensureGadgetRegistered(id.toString(), parsed.title);
+    // Registration alone is provisional; a deliberate restore is user activity.
+    await this.#user.setGadgetLastActive(id.toString(), new Date(), undefined);
+    const outputs = await target.getOutputsForOwnerBackfill(this.#userId.toString());
+    if (outputs === null) throw new Error("Restored workspace ownership changed.");
+    await this.#user.syncWorkspaceOutputs(id.toString(), outputs);
+    return id.toString();
   }
 
   async listGadgets(): Promise<GadgetMetadataWithTimestamps[]> {

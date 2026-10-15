@@ -99,6 +99,7 @@ export default defineConfig({
           TEST_USER_DIRECTORY: { className: 'UserDirectoryDurableObject', useSQLite: true },
           // Likewise only reached through `ctx.exports`, by the overseer deleting a blueprint.
           TEST_ADMIN_SETTINGS: { className: 'AdminSettings', useSQLite: true },
+          TEST_STORAGE_INSPECTOR: { className: 'WorkspaceStorageInspector', useSQLite: true },
         },
       },
     }),
