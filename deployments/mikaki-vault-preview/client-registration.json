@@ -1,8 +1,8 @@
 {
   "client_id": "817accd9-e56b-40c9-88d4-3b5aebd0a580",
-  "sector_identifier": "vault-20261015-router.masanork.workers.dev",
+  "sector_identifier": "cfos.mikaki.org",
   "redirect_uris": [
-    "https://vault-20261015-router.masanork.workers.dev/api/auth/mikaki/callback"
+    "https://cfos.mikaki.org/api/auth/mikaki/callback"
   ],
   "key": {
     "kid": "cfos-vault-20261015",

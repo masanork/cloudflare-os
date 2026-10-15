@@ -80,6 +80,35 @@ describe('router fetch', () => {
     expect(await route(env, '/')).toBe('backend');
     expect(await route(env, '/blueprints/123')).toBe('backend');
   });
+
+  it('redirects legacy page URLs to the canonical origin without changing path or query', async () => {
+    const env = makeEnv({ ASSETS: stubFetcher('assets'), PUBLIC_BASE_URL: 'https://cfos.example' });
+    for (const method of ['GET', 'HEAD']) {
+      const req = new Request('https://legacy.example/workspace/123?chat=4', { method });
+      const res = await router.fetch!(req, env, {} as ExecutionContext);
+      expect(res.status).toBe(307);
+      expect(res.headers.get('Location')).toBe('https://cfos.example/workspace/123?chat=4');
+    }
+    const req = new Request('https://cfos.example/workspace/123');
+    expect(await (await router.fetch!(req, env, {} as ExecutionContext)).text()).toBe('assets');
+  });
+
+  it('keeps API, connector and POST requests on their original handlers', async () => {
+    const env = makeEnv({ ASSETS: stubFetcher('assets'), PUBLIC_BASE_URL: 'https://cfos.example',
+      GATEKEEPER_GOOGLE: stubFetcher('google') });
+    expect(await route(env, '/api/auth/mikaki/callback?code=test')).toBe('backend');
+    expect(await route(env, '/gatekeeper/google/oauth?code=test')).toBe('google');
+    const req = new Request('https://legacy.example/page', { method: 'POST', body: 'test' });
+    expect(await (await router.fetch!(req, env, {} as ExecutionContext)).text()).toBe('assets');
+  });
+
+  it('rejects a canonical origin containing a path or using HTTP', async () => {
+    for (const origin of ['http://cfos.example', 'https://cfos.example/path']) {
+      const req = new Request('https://legacy.example/');
+      const res = await router.fetch!(req, makeEnv({ PUBLIC_BASE_URL: origin }), {} as ExecutionContext);
+      expect(res.status).toBe(503);
+    }
+  });
 });
 
 describe('router email', () => {
