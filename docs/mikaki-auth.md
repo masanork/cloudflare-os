@@ -48,6 +48,26 @@ build cache already fingerprints `VITE_*` values. Default builds retain the
 existing password/gatekeeper/Access deployment behavior. The native app's
 device-session handoff is explicitly unavailable in this first web-only mode.
 
+## Offer Workers AI without personal tokens
+
+Mikaki sign-in does not configure a model provider. For an installation that
+offers Workers AI immediately, keep the backend's `WORKERS_AI` binding and set:
+
+| Backend variable | Value |
+| --- | --- |
+| `CF_AI_GATEWAY` | An existing AI Gateway in this Worker's Cloudflare account |
+| `CF_AI_GATEWAY_ACCOUNT_ID` | That Cloudflare account's ID |
+| `CF_AI_GATEWAY_PROVIDERS` | `cloudflare` |
+| `CF_AI_GATEWAY_USE_BINDING` | `true` |
+
+The same-account binding authenticates inference and cost-log reads, so neither
+the backend nor the browser needs a personal API token for this configuration.
+Onboarding lists the deployment's enabled models for selection. Inference uses
+the installation's Cloudflare account; its gateway billing and model access
+must already be configured. Without these variables, onboarding asks users to
+add their own model credentials. Do not use a deployment-management API token
+as an inference credential.
+
 ## Identity and session boundaries
 
 The app uses `mikaki-<SHA256(JSON([issuer, sub]))>` as its own user name. The
