@@ -9,6 +9,7 @@ import { GitStore } from "../src/git-store";
 import { makeActionStorage, openFakeOverseer } from "./fixtures";
 import {
   decodePortable,
+  encodePortable,
   parseWorkspaceSnapshot,
 } from "@gadgets/workshop-shared/workspace-snapshot";
 
@@ -201,20 +202,19 @@ it("restores a workspace whose unused allocation counters exist only as typed-st
   });
 });
 it.each(["containsRestrictedData", "ownerInvitesOnly"] as const)(
-    "refuses disclosure if %s changes during an awaited facet read and removes private copies", async flag => {
-  const source = "capture-authority-source-" + flag;
-  await capture(source);
-  await runInDurableObject(
-    env.TEST_OVERSEER.getByName(source),
-    async (_instance, ctx) => {
+  "refuses disclosure if %s changes during an awaited facet read and removes private copies",
+  async (flag) => {
+    const source = "capture-authority-source-" + flag;
+    await capture(source);
+    await runInDurableObject(env.TEST_OVERSEER.getByName(source), async (_instance, ctx) => {
       const storage = makeOverseerStorage(ctx.storage);
       const result = exportWorkspaceSnapshot(ctx, storage, origin);
       storage[flag].put(true);
       await expect(result).rejects.toThrow("authority changed");
       expect([...ctx.storage.kv.list({ prefix: "_vault_snapshot_" })]).toEqual([]);
-    },
-  );
-});
+    });
+  },
+);
 it("rejects missing child data and live authority rows before claiming ownership", async () => {
   const snapshot = parseWorkspaceSnapshot(await capture("invalid-snapshot-source"));
   for (const [name, changed, message] of [
@@ -285,5 +285,96 @@ it("reaps interrupted private facet staging and safely retries the same owner-bo
     expect(data.kv).toEqual([["settings", "Retained preference"]]);
     ctx.facets.delete("gadget");
     ctx.facets.delete("gadget2");
+  });
+});
+it("refuses scoped spawned histories rather than resuming them with default workspace capabilities", async () => {
+  const source = "spawned-snapshot-source";
+  await capture(source);
+  await runInDurableObject(env.TEST_OVERSEER.getByName(source), async (_instance, ctx) => {
+    const storage = makeOverseerStorage(ctx.storage);
+    storage.chatContext.put({
+      chatId: 0,
+      spawnerConfig: {
+        displayName: "Scoped agent",
+        modelId: null,
+        env: { APP1: 1 },
+      },
+      bindings: { APP1: 1 },
+    });
+    await expect(exportWorkspaceSnapshot(ctx, storage, origin)).rejects.toThrow(
+      "Spawned chat scopes",
+    );
+    expect([...ctx.storage.kv.list({ prefix: "_vault_snapshot_" })]).toEqual([]);
+  });
+});
+it("keeps callback history without advertising omitted argument capabilities on export or restore", async () => {
+  const source = "callback-snapshot-source";
+  await capture(source);
+  const text = await runInDurableObject(
+    env.TEST_OVERSEER.getByName(source),
+    async (_instance, ctx) => {
+      const storage = makeOverseerStorage(ctx.storage);
+      ctx.storage.kv.put("chats:a0.a1", {
+        type: "agentCallback",
+        chatId: 0,
+        sequence: 1,
+        timestamp: new Date(),
+        bindingName: "CALL_ARGS",
+        methodName: "notify",
+        args: "history",
+      });
+      ctx.storage.kv.put("agentCallbackArgs:a0.a1", { args: ["DO NOT EXPORT"] });
+      storage.nextChatSequences.put({ chatId: 0, nextSequence: 2 });
+      return exportWorkspaceSnapshot(ctx, storage, origin);
+    },
+  );
+  const snapshot = parseWorkspaceSnapshot(text);
+  const pair = snapshot.records.find(([key]) => key === "chats:a0.a1")!;
+  const row = decodePortable(pair[1]) as Record<string, unknown>;
+  expect(row["bindingName"]).toBeUndefined();
+  expect(text).not.toContain("DO NOT EXPORT");
+  // The restore boundary also sanitizes an older or caller-authored archive.
+  pair[1] = encodePortable({ ...row, bindingName: "CALL_ARGS" });
+  const target = env.TEST_OVERSEER.getByName("callback-snapshot-target");
+  await target.restoreWorkspaceSnapshotForOwner(restoredOwner, JSON.stringify(snapshot));
+  await runInDurableObject(target, (_instance, ctx) => {
+    expect(
+      ctx.storage.kv.get<Record<string, unknown>>("chats:a0.a1")?.["bindingName"],
+    ).toBeUndefined();
+    expect(makeOverseerStorage(ctx.storage).chatContext.get(0)?.spawnerConfig).toBeUndefined();
+  });
+});
+it("journals all planned clone names before the first clone and cleans interrupted capture", async () => {
+  const source = "journal-snapshot-source";
+  await capture(source);
+  await runInDurableObject(env.TEST_OVERSEER.getByName(source), async (_instance, ctx) => {
+    let cloned = false;
+    const facets = new Proxy(ctx.facets, {
+      get(target, key) {
+        if (key === "clone")
+          return (...args: Parameters<typeof target.clone>) => {
+            const [journal] = [
+              ...ctx.storage.kv.list<{ names: string[] }>({ prefix: "_vault_snapshot_" }),
+            ];
+            expect(journal?.[1].names).toHaveLength(2);
+            expect(journal?.[1].names).toContain(args[1]);
+            target.clone(...args);
+            cloned = true;
+            throw new Error("Interrupted capture");
+          };
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const interrupted = new Proxy(ctx, {
+      get(target, key) {
+        return key === "facets" ? facets : Reflect.get(target, key, target);
+      },
+    });
+    await expect(
+      exportWorkspaceSnapshot(interrupted, makeOverseerStorage(ctx.storage), origin),
+    ).rejects.toThrow("Interrupted capture");
+    expect(cloned).toBe(true);
+    expect([...ctx.storage.kv.list({ prefix: "_vault_snapshot_" })]).toEqual([]);
   });
 });

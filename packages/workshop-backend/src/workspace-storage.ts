@@ -9,6 +9,45 @@ import {
 
 const quote = (name: string) => '"' + name.replaceAll('"', '""') + '"';
 
+// sqlite_master SQL is untrusted on import. A CREATE TABLE AS SELECT or a second
+// statement could write unlisted data before the bounded archive rows are loaded.
+const validateDdl = (entry: WorkspaceStorage["schema"][number]) => {
+  const tokens = (
+    entry.sql.match(
+      /--[^\n]*|\/\*[\s\S]*?\*\/|'(?:[^']|'')*'|"(?:[^"]|"")*"|`(?:[^`]|``)*`|\[[^\]]*\]|[\p{L}\p{N}\p{M}_$]+|[^\s]/gu,
+    ) ?? []
+  )
+    .filter((t) => !t.startsWith("--") && !t.startsWith("/*"))
+    .map((t) => t.toUpperCase());
+  if (tokens.at(-1) === ";") tokens.pop();
+  const reject = () => {
+    throw new Error("Only single, non-data-producing schema DDL is portable.");
+  };
+  if (entry.type === "table") {
+    const name = tokens[2] === "IF" && tokens[3] === "NOT" && tokens[4] === "EXISTS" ? 5 : 2;
+    if (tokens[name + 1] !== "(") reject();
+  }
+  if (entry.type !== "trigger") {
+    if (tokens.includes(";")) reject();
+    return;
+  }
+  // Trigger bodies legitimately contain semicolons. Find their closing END,
+  // accounting for CASE expressions, and refuse any statement after the body.
+  const begin = tokens.indexOf("BEGIN", 3);
+  if (begin < 0) reject();
+  let cases = 0;
+  for (let i = begin + 1; i < tokens.length; i++) {
+    if (tokens[i] === "CASE") cases++;
+    if (tokens[i] !== "END") continue;
+    if (cases) cases--;
+    else {
+      if (i !== tokens.length - 1) reject();
+      return;
+    }
+  }
+  reject();
+};
+
 /** Trusted storage inspector, reachable only through supervisor-owned temporary/fresh facets. */
 export class WorkspaceStorageInspector extends DurableObject<Cloudflare.Env> {
   /** A capture clone never runs an archived app's scheduled work. */
@@ -94,6 +133,7 @@ export class WorkspaceStorageInspector extends DurableObject<Cloudflare.Env> {
   /** Restore only into empty staging storage, before any archived gadget code is started. */
   importState(state: WorkspaceStorage): void {
     validateWorkspaceStorage(state);
+    for (const entry of state.schema) validateDdl(entry);
     this.ctx.storage.transactionSync(() => {
       if (
         this.ctx.storage.sql

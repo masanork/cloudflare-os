@@ -151,3 +151,66 @@ it("portable storage retains byte/date/map/set values and refuses executable/cap
     "object key",
   );
 });
+it("refuses data-producing and multi-statement DDL before writing any staging data", async () => {
+  await runInDurableObject(
+    env.TEST_OVERSEER.getByName("portable-sql-ddl"),
+    async (_instance, ctx) => {
+      const target = ctx.facets.get<WorkspaceStorageInspector>("target", () => ({
+        class: ctx.exports.WorkspaceStorageInspector,
+      }));
+      const refuse = async (state: WorkspaceStorage) => {
+        try {
+          await target.importState(state);
+          throw new Error("Expected DDL refusal");
+        } catch (error) {
+          expect(String(error)).toContain("non-data-producing");
+        }
+        expect(JSON.parse(await target.exportState())).toEqual({ schema: [], tables: [], kv: [] });
+      };
+      for (const sql of [
+        "CREATE TABLE notes AS SELECT 1 AS id",
+        "CREATE TABLE notes /* harmless-looking comment */ AS SELECT randomblob(10000000) AS id",
+        "CREATE TABLE notes AS WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000) SELECT x AS id FROM n",
+        "CREATE TABLE notes(id INTEGER); INSERT INTO notes VALUES(1)",
+      ]) {
+        await refuse({
+          schema: [{ type: "table", name: "notes", sql }],
+          tables: [{ name: "notes", columns: ["id"], rows: [] }],
+          kv: [],
+        });
+      }
+      for (const entry of [
+        {
+          type: "index",
+          name: "by_body",
+          sql: "CREATE INDEX by_body ON notes(body); INSERT INTO notes(id) VALUES(4)",
+        },
+        {
+          type: "view",
+          name: "ids",
+          sql: "CREATE VIEW ids AS SELECT id FROM notes; INSERT INTO notes(id) VALUES(4)",
+        },
+        {
+          type: "trigger",
+          name: "updated",
+          sql: "CREATE TRIGGER updated AFTER UPDATE ON notes BEGIN UPDATE notes SET body='x'; END; INSERT INTO notes(id) SELECT CASE WHEN 1 THEN 4 END",
+        },
+      ]) {
+        await refuse({ ...fixture, schema: [...fixture.schema, entry] });
+      }
+      await target.importState({
+        ...fixture,
+        schema: [
+          ...fixture.schema,
+          {
+            type: "trigger",
+            name: "updated",
+            sql: "CREATE TRIGGER updated /* retained comment */ AFTER UPDATE ON notes BEGIN UPDATE notes SET body=CASE WHEN id=1 THEN 'text; -- END' ELSE body END; END",
+          },
+        ],
+      });
+      expect(JSON.parse(await target.exportState()).tables[0].rows).toEqual(fixture.tables[0].rows);
+      ctx.facets.delete("target");
+    },
+  );
+});

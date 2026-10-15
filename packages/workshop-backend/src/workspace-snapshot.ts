@@ -41,8 +41,23 @@ const size = (value: unknown) => new TextEncoder().encode(JSON.stringify(value))
 const snapshotOptions = (ctx: DurableObjectState) => ({
   class: ctx.exports.WorkspaceStorageInspector,
 });
+const businessRow = (key: string, value: unknown): unknown => {
+  if (
+    key.startsWith("chats:") &&
+    value &&
+    typeof value === "object" &&
+    "type" in value &&
+    value.type === "agentCallback"
+  ) {
+    const row = { ...value } as Record<string, unknown>;
+    // Callback arguments can contain capabilities and are deliberately not copied.
+    delete row["bindingName"];
+    return row;
+  }
+  return value;
+};
 
-/** Capture business rows and clone each gadget facet before yielding to storage-export RPC. */
+/** Durably journal a capture, then freeze each gadget before yielding to inspector RPC. */
 export async function exportWorkspaceSnapshot(
   ctx: DurableObjectState,
   storage: OverseerStorage,
@@ -66,6 +81,11 @@ export async function exportWorkspaceSnapshot(
     throw new Error("Finish active agents and pending actions before taking a snapshot.");
   if (ctx.storage.kv.get<number[]>("deadWorktreeIds")?.length)
     throw new Error("Private worktree archives need a separate export contract.");
+  const assertChatScopes = () => {
+    if ([...storage.chatContext.list()].some((c) => c.spawnerConfig || c.spawnerTypes))
+      throw new Error("Spawned chat scopes need a separate export contract.");
+  };
+  assertChatScopes();
   const gadgets = [...storage.gadgets.list()];
   if (
     gadgets.length > 16 ||
@@ -89,15 +109,18 @@ export async function exportWorkspaceSnapshot(
   let recordBytes = size(snapshot);
   for (const [key, value] of ctx.storage.kv.list()) {
     if (!retained(key)) continue;
-    const pair: WorkspaceSnapshot["records"][number] = [key, encodePortable(value)];
+    const pair: WorkspaceSnapshot["records"][number] = [
+      key,
+      encodePortable(businessRow(key, value)),
+    ];
     recordBytes += size(pair) + 1;
     snapshot.records.push(pair);
     if (recordBytes > WORKSPACE_SNAPSHOT_MAX_BYTES)
       throw new Error("Workspace snapshot exceeds 2 MiB.");
   }
-  const base = crypto.randomUUID(),
-    copies: { id: number; name: string }[] = [];
+  const base = crypto.randomUUID();
   const journal = "_vault_snapshot_" + base;
+  const copies = gadgets.map((g) => ({ id: g.id, name: journal + "_" + g.id }));
   // A previous interrupted capture can leave private clones. A later capture reaps expired ones.
   // Materialize the cursor before deleting entries and facets; never mutate during iteration.
   const abandoned = Array.from(
@@ -109,17 +132,35 @@ export async function exportWorkspaceSnapshot(
       ctx.storage.kv.delete(key);
     }
   }
+  const before = JSON.stringify(snapshot.records);
+  const assertUnchanged = () => {
+    if (
+      storage.ownerId.get() !== captureOwner ||
+      storage.containsRestrictedData.get() ||
+      storage.ownerInvitesOnly.get()
+    )
+      throw new Error("Workspace export authority changed during capture.");
+    if ([...storage.activeAgents.list()].length || [...storage.pendingAgentCalls.list()].length)
+      throw new Error("Workspace started execution during snapshot. Try again.");
+    assertChatScopes();
+    const current = [...ctx.storage.kv.list()]
+      .filter(([key]) => retained(key))
+      .map(([key, value]) => [key, encodePortable(businessRow(key, value))]);
+    if (JSON.stringify(current) !== before)
+      throw new Error("Workspace changed during snapshot. Try again.");
+  };
   try {
-    for (const gadget of gadgets) {
-      const name = journal + "_" + gadget.id;
-      ctx.facets.clone(
-        gadget.id === storage.defaultGadgetId.get() ? "gadget" : "gadget" + gadget.id,
-        name,
-      );
-      copies.push({ id: gadget.id, name });
-    }
+    // Make every planned name durable before creating any private copy. A crash can then
+    // always be recovered by the abandoned-capture sweep, including a partial clone loop.
     ctx.storage.kv.put(journal, { at: Date.now(), names: copies.map((c) => c.name) });
-    const before = JSON.stringify(snapshot.records);
+    await ctx.storage.sync();
+    assertUnchanged();
+    for (const copy of copies) {
+      ctx.facets.clone(
+        copy.id === storage.defaultGadgetId.get() ? "gadget" : "gadget" + copy.id,
+        copy.name,
+      );
+    }
     for (const copy of copies) {
       const inspector = ctx.facets.get<WorkspaceStorageInspector>(copy.name, () =>
         snapshotOptions(ctx),
@@ -131,16 +172,7 @@ export async function exportWorkspaceSnapshot(
       if (size(snapshot) > WORKSPACE_SNAPSHOT_MAX_BYTES)
         throw new Error("Workspace snapshot exceeds 2 MiB.");
     }
-    if (storage.ownerId.get() !== captureOwner || storage.containsRestrictedData.get() ||
-        storage.ownerInvitesOnly.get())
-      throw new Error("Workspace export authority changed during capture.");
-    if ([...storage.activeAgents.list()].length || [...storage.pendingAgentCalls.list()].length)
-      throw new Error("Workspace started execution during snapshot. Try again.");
-    const current = [...ctx.storage.kv.list()]
-      .filter(([key]) => retained(key))
-      .map(([key, value]) => [key, encodePortable(value)]);
-    if (JSON.stringify(current) !== before)
-      throw new Error("Workspace changed during snapshot. Try again.");
+    assertUnchanged();
     const text = JSON.stringify(snapshot);
     parseWorkspaceSnapshot(text);
     return text;
@@ -176,7 +208,7 @@ export async function restoreWorkspaceSnapshot(
   for (const name of pending?.names ?? []) ctx.facets.delete(name);
   const records: [string, unknown][] = snapshot.records.map(([key, value]) => {
     if (!retained(key)) throw new Error("Snapshot contains permission or execution state.");
-    return [key, decodePortable(value)];
+    return [key, businessRow(key, decodePortable(value))];
   });
   const saved = new Map(records);
   if (saved.get("version") !== 4 && saved.get("version") !== OVERSEER_STORAGE_VERSION)
