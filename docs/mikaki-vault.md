@@ -170,10 +170,22 @@ a real AI response have been checked. The old staging page URLs redirect to
 the canonical domain; snapshots saved from a different origin cannot be
 restored into this origin.
 
-Mikaki login does not unlock Vault. Saving and restoring still require the
-owner's Passkey PRF unlock and the review shown in the Vault popup. Hosted
-save/restore qualification remains pending; deployment and local tests are not
-evidence of a physical-device roundtrip.
+Mikaki login does not unlock Vault. Saving and restoring require the owner's
+Passkey PRF unlock and the review shown in each Vault popup.
+
+On **2026-10-17**, a hosted Chrome/macOS journey with a real Passkey completed
+the reviewed encrypted save and restore into a distinct workspace. The copy
+retained chat, committed code, SQL rows, a KV marker and a 106-byte attachment
+whose SHA-256 matched the source file. After reloading, a new SQL row persisted
+only in the restored gadget; the original retained its single initial row.
+The gadget did not seed data from its constructor or read methods.
+
+Closing a save popup before unlock reported cancellation and allowed a fresh
+save. After app logout in another tab, the already-open restored app required
+sign-in when it next attempted a read. A fresh Mikaki SSO login reopened the
+same restored data. This qualifies that controlled desktop fixture, rather
+than every device/browser or snapshot size. Hosted issuer-side revocation,
+forced expiry and mobile physical-device coverage remain separate checks.
 
 Use synthetic data in a dedicated test workspace:
 
