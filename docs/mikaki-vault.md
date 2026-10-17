@@ -35,8 +35,8 @@ pnpm exec tsc -p packages/workshop-frontend/tsconfig.json
 
 Receiver checks and the paired local browser fixture are described in Mikaki's
 `docs/cloudflare-os-vault.md`. Set `MIKAKI_CLOUDFLARE_OS_SOURCE` in that fixture
-to this checkout root to bundle its actual sender. No hosted connection,
-real-device or production qualification is claimed.
+to this checkout root to bundle its actual sender. Local fixtures do not qualify
+hosted sessions, popup policy or physical Passkeys; see the hosted checklist below.
 
 
 ## Bounded workspace save and restore
@@ -95,13 +95,14 @@ approval rules, hooks, live agent context/callback arguments, alarms and session
 are not restored. Internal gadget-to-gadget bindings are kept; external
 connections must be configured again. External Artifacts stores are not crawled.
 This is a business-data copy contract, not native runtime serialization or E2EE
-against the source backend/AI. App sessions remain independent; Mikaki OIDC SSO
-is a separate increment.
+against the source backend/AI. The optional [Mikaki OIDC mode](mikaki-auth.md)
+uses the same identity provider for app login, while keeping the app session
+and Vault unlock separate.
 
 The trusted `WorkspaceStorageInspector` class is registered by migration `v4`
 and used only as a supervisor-owned facet. It has no public route. Deployment
-configuration generation must retain this migration. No hosted deployment has
-been performed for this implementation.
+configuration generation must retain this migration. The isolated hosted
+installation below includes this implementation.
 
 ```sh
 pnpm exec vp run -F @gadgets/typed-storage build
@@ -131,8 +132,9 @@ pnpm exec vitest run __tests__/workspace-vault.test.ts
 ```
 
 The RPC test also checks caller-scoped operation IDs, exact/changed retries and
-another user's lack of access. Real devices, the complete hosted frontend,
-account linking and popup policy still need deployed qualification.
+another user's lack of access. These local fixtures do not exercise real
+Passkeys or hosted session/popup policies; the hosted journey below records
+the separate physical-device evidence.
 
 ## Complete local Workshop UI qualification
 
@@ -159,9 +161,55 @@ registration, output indexing, chat/attachment data and writable gadget SQL/KV,
 and verifies that the source workspace is unchanged and another user is refused.
 The Workshop account/session and Mikaki's login/Passkey PRF remain test fixtures.
 
-A hosted preview additionally needs its own target account/Workers subdomain,
-an Access application that covers its router origin (`CF_ACCESS_AUD` and
-`CF_ACCESS_ISS`), and a deployed Mikaki `/vault` destination. The existing
-`pnpm preview:deploy --dry-run` checks the preview inputs before deployment.
-Do not reuse an unrelated live instance's storage for this qualification. Real
-login, physical Passkeys and hosted popup/session policies remain outstanding.
+## Hosted installation and qualification
+
+The isolated Vault installation is deployed at **https://cfos.mikaki.org**,
+with **https://auth.mikaki.org/vault** as its receiver. It uses direct Mikaki
+OIDC sign-in and a server-managed Workers AI binding, so the owner does not
+enter a personal AI API token. Owner sign-in, existing workspace visibility and
+a real AI response have been checked. The old staging page URLs redirect to
+the canonical domain; snapshots saved from a different origin cannot be
+restored into this origin.
+
+Mikaki login does not unlock Vault. Saving and restoring require the owner's
+Passkey PRF unlock and the review shown in each Vault popup.
+
+On **2026-10-17**, a hosted Chrome/macOS journey with a real Passkey completed
+the reviewed encrypted save and restore into a distinct workspace. The copy
+retained chat, committed code, SQL rows, a KV marker and a 106-byte attachment
+whose SHA-256 matched the source file. After reloading, a new SQL row persisted
+only in the restored gadget; the original retained its single initial row.
+The gadget did not seed data from its constructor or read methods.
+
+Closing a save popup before unlock reported cancellation and allowed a fresh
+save. After app logout in another tab, the already-open restored app required
+sign-in when it next attempted a read. A fresh Mikaki SSO login reopened the
+same restored data. This qualifies that controlled desktop fixture, rather
+than every device/browser or snapshot size. Hosted issuer-side revocation,
+forced expiry and mobile physical-device coverage remain separate checks.
+
+Use synthetic data in a dedicated test workspace:
+
+1. Create a short conversation with a small attachment and one permanent
+   gadget. Give its code, SQL row and KV value distinct markers. Initialize
+   the data explicitly, rather than seeding it in the constructor, so an empty
+   restored database cannot appear to pass.
+2. Finish the agent and commit every proposed change. Open **Workspace in
+   Vault**, then **Save workspace to Vault**. Unlock the popup, review the
+   `https://cfos.mikaki.org` source and save the encrypted copy. Check the
+   completion receipt in Cloudflare OS.
+3. Choose **Restore workspace from Vault**, select that test snapshot and
+   review the plaintext disclosure to the same origin. Restore into a new
+   workspace; record the distinct source and restored URLs.
+4. Reload the restored workspace. Verify chat, attachment contents, code,
+   SQL rows and KV marker. Add a row to the restored gadget, reload again,
+   then check that the source retains only its original data.
+5. Check cancellation and a fresh retry, and verify app logout/session
+   invalidation on the hosted installation. Record physical-device and popup
+   results separately from local fixture coverage.
+
+A new installation needs isolated storage and an explicit authentication mode.
+Follow [direct Mikaki sign-in](mikaki-auth.md) for OIDC; do not configure an
+Access gate or `CF_ACCESS_AUD`/`CF_ACCESS_ISS` in that mode. The generic Access
+preview workflow remains available through `pnpm preview:deploy --dry-run`.
+Do not reuse an unrelated live instance's storage for this qualification.
