@@ -131,5 +131,30 @@ The [hosted Vault qualification journey](mikaki-vault.md#hosted-installation-and
 also passed on 2026-10-17 with a real Passkey, reviewed save/restore, reloaded
 business data and an unchanged source. App logout forced an already-open tab
 back to sign-in on its next read, and normal SSO reopened the restored copy.
-Hosted issuer-side revocation, forced expiry and other physical devices remain
-separate from that desktop check and the local virtual-Passkey test.
+The hosted session checks below cover issuer-side revocation and injected RP
+expiry separately from that save/restore journey and the local fixture.
+
+### Hosted session failure qualification
+
+On **2026-10-17**, the isolated Chrome/macOS installation passed these checks
+with its restored synthetic gadget open on an existing WebSocket:
+
+| Check | Injection and observed result |
+| --- | --- |
+| Issuer revocation without a notification | An operator revoked exactly the current Cloudflare OS `client_session` in the issuer's D1. The RP's existing 300-second lease was left unchanged and no logout delivery was queued. Reads still worked within the lease. At its natural deadline the open connection stopped, the page returned to sign-in without another user operation or reload, and the RP session row was deleted. |
+| RP idle expiry | Only that test RP session's `idle_expires_at` was shortened. After the deadline, **Add restored note** through the retained gadget capability returned the page to sign-in. Reopening still showed exactly the original two SQL rows: the attempted write did not run. |
+| RP absolute expiry | Only a new test RP session's cached `parent_expires_at` was shortened. A read before the deadline capped both its lease and idle deadline at that time. The open page returned to sign-in automatically after the deadline. |
+
+Each retry used the normal sign-in button, obtained a different app SID and
+reopened the same workspace with its code, SQL and KV intact. The actual parent
+SSO expiry, other app sessions, and issuer policy (300-second checks and
+seven-day app idle timeout) were unchanged. The revoked SID was not reactivated.
+
+These are scoped operator fault-injection checks. They do not qualify hosted
+signed Back-Channel Logout delivery, a real 30-day SSO expiry, or physical mobile
+Passkey/popup behavior. For a repeat, use a dedicated synthetic workspace and
+record the exact current RP session before changing anything. Identify the
+issuer row by its client ID and SID; do not revoke an account or change global
+policy. Keep session values private. After expiry, sign in normally rather than
+restoring an expired or revoked row, and verify that a refused write did not
+change the gadget's persisted data.

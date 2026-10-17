@@ -185,8 +185,12 @@ Closing a save popup before unlock reported cancellation and allowed a fresh
 save. After app logout in another tab, the already-open restored app required
 sign-in when it next attempted a read. A fresh Mikaki SSO login reopened the
 same restored data. This qualifies that controlled desktop fixture, rather
-than every device/browser or snapshot size. Hosted issuer-side revocation,
-forced expiry and mobile physical-device coverage remain separate checks.
+than every device/browser or snapshot size. Separate hosted
+[session failure checks](mikaki-auth.md#hosted-session-failure-qualification)
+passed issuer revocation without a notification and injected RP idle/absolute
+expiry. Existing connections stopped, an expired session could not write, and
+normal sign-in preserved the restored data. Hosted signed logout delivery and
+mobile physical-device coverage remain separate checks.
 
 Use synthetic data in a dedicated test workspace:
 
@@ -207,6 +211,10 @@ Use synthetic data in a dedicated test workspace:
 5. Check cancellation and a fresh retry, and verify app logout/session
    invalidation on the hosted installation. Record physical-device and popup
    results separately from local fixture coverage.
+6. Qualify issuer revocation and RP expiry using the scoped
+   [session failure procedure](mikaki-auth.md#hosted-session-failure-qualification).
+   Confirm rejection on an existing connection and unchanged SQL after an
+   expired-session write attempt. Do not change account-wide session policy.
 
 A new installation needs isolated storage and an explicit authentication mode.
 Follow [direct Mikaki sign-in](mikaki-auth.md) for OIDC; do not configure an
