@@ -132,8 +132,9 @@ pnpm exec vitest run __tests__/workspace-vault.test.ts
 ```
 
 The RPC test also checks caller-scoped operation IDs, exact/changed retries and
-another user's lack of access. Real devices, the complete hosted frontend,
-account linking and popup policy still need deployed qualification.
+another user's lack of access. These local fixtures do not exercise real
+Passkeys or hosted session/popup policies; the hosted journey below records
+the separate physical-device evidence.
 
 ## Complete local Workshop UI qualification
 
