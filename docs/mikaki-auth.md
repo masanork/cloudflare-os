@@ -124,5 +124,9 @@ The opt-in interoperability test uses an actual Rust Mikaki Worker, isolated
 D1 databases and a Chromium virtual Passkey. It validates enrollment, first
 connection review, real code exchange/ID Token/SID checks, callback replay and
 OP-side revocation. It does not access a hosted account or a real Passkey.
-Hosted owner sign-in, AI model setup and the subsequent Vault save/restore
-still need an owner-driven browser check; deployment is not evidence of that.
+On the isolated `https://cfos.mikaki.org` installation, owner sign-in and
+existing workspace visibility have been checked after the domain migration.
+Managed Workers AI onboarding and a real AI response were also checked.
+Physical Passkey Vault unlock and a reviewed hosted save/restore still require
+the [Vault qualification journey](mikaki-vault.md#hosted-installation-and-qualification);
+neither deployment nor the local virtual-Passkey test proves that roundtrip.
