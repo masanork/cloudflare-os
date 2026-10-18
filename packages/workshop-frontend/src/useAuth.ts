@@ -3,6 +3,7 @@ import { RpcStub } from 'capnweb'
 import { PublicApi, AuthenticatedApi } from '@gadgets/workshop-shared/api'
 import { setReportedUserId } from './errorReporting'
 import { MIKAKI_AUTH_MODE, loadMikakiSession, endMikakiSession } from './features/auth/mikakiSession'
+import { NativeConnectSession } from './features/native-app/connectSession'
 
 const CF_ACCESS_MODE = !MIKAKI_AUTH_MODE && import.meta.env.VITE_CF_ACCESS_MODE === 'true'
 
@@ -16,6 +17,7 @@ interface AuthState {
 export { CF_ACCESS_MODE }
 
 export function useAuth(publicApi: RpcStub<PublicApi>) {
+  const [nativeConnectSession] = useState(() => new NativeConnectSession())
   const [authState, setAuthState] = useState<AuthState>({
     token: null,
     authenticatedApi: null,
@@ -49,12 +51,14 @@ export function useAuth(publicApi: RpcStub<PublicApi>) {
     const authenticatedApi = authState.authenticatedApi
     if (!authenticatedApi) return
     let cancelled = false
-    authenticatedApi.whoami().then((info) => {
+    const identity = authenticatedApi.whoami()
+    const untrack = nativeConnectSession.track(authenticatedApi, identity)
+    identity.then((info) => {
       // Only a real user account names a person: for a gadget author `id` is its owner's id.
       if (!cancelled && info.type === 'user') setReportedUserId(info.id)
     }).catch(() => {})
-    return () => { cancelled = true }
-  }, [authState.authenticatedApi])
+    return () => { cancelled = true; untrack() }
+  }, [authState.authenticatedApi, nativeConnectSession])
 
   useEffect(() => {
     if (MIKAKI_AUTH_MODE) {

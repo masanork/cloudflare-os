@@ -6,7 +6,8 @@ import {
   type WorkspaceSnapshot,
   type WorkspaceStorage,
 } from "@gadgets/workshop-shared/workspace-snapshot";
-import type { OverseerStorage } from "./storage-schema/overseer-storage";
+import { validateBindingName } from "@gadgets/workshop-shared/api";
+import type { AiChatAgentContext, OverseerStorage } from "./storage-schema/overseer-storage";
 import { OVERSEER_STORAGE_VERSION } from "./storage-schema/overseer-migrations";
 import type { WorkspaceStorageInspector } from "./workspace-storage";
 import { keyString } from "@gadgets/typed-storage";
@@ -26,6 +27,7 @@ const collections = new Set([
   "gadgets",
   "gitObjects",
   "chatMeta",
+  "chatContext",
   "chats",
   "chatCompactions",
   "chatChanges",
@@ -57,6 +59,87 @@ const businessRow = (key: string, value: unknown): unknown => {
   return value;
 };
 
+// Only the attachment scratch association and local bindings survive; model prompts,
+// gatekeepers and live agent context remain outside the archive.
+function* snapshotRows(ctx: DurableObjectState, storage: OverseerStorage)
+    : Generator<WorkspaceSnapshot["records"][number]> {
+  // KV permits only one list cursor; collect the small workpiece map before scanning rows.
+  const workpieces = new Map([...storage.gadgets.list()].map(g => [g.id, g]));
+  for (const [key, value] of ctx.storage.kv.list()) {
+    if (!retained(key)) continue;
+    let row = businessRow(key, value);
+    if (key.startsWith("chatContext:")) {
+      const context = value as AiChatAgentContext;
+      if (!context.scratch) continue;
+      const bindings = context.bindings ?? Object.fromEntries([
+        ...[...workpieces.values()].flatMap(g => g.type === "gadget"
+          ? [[g.bindingName, g.id] as const] : []),
+        [context.scratch.bindingName, context.scratch.worktreeId],
+      ]);
+      row = { chatId: context.chatId, scratch: context.scratch,
+        bindings: Object.fromEntries(Object.entries(bindings).filter(([, id]) => {
+          const target = workpieces.get(id);
+          return target?.type === "gadget" ||
+            (target?.type === "worktree" && target.chatId === context.chatId &&
+             target.id === context.scratch!.worktreeId);
+        })) };
+    }
+    yield [key, encodePortable(row)];
+  }
+}
+
+const objectRow = (value: unknown): Record<string, unknown> | undefined =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown> : undefined;
+
+// Scratch records are Git-only workpieces, never executable facets. Keep their owning
+// chat and binding paired on both boundaries so restore cannot widen a private scope.
+function validateScratchRows(saved: Map<string, unknown>) {
+  if ([...saved.keys()].filter(key => key.startsWith("gadgets:")).length > 16)
+    throw new Error("Too many snapshot workpieces.");
+  for (const [key, value] of saved) {
+    const row = objectRow(value);
+    if (key.startsWith("chatContext:")) {
+      const scratch = objectRow(row?.["scratch"]), bindings = objectRow(row?.["bindings"]);
+      if (!row || Object.keys(row).toSorted().join(",") !== "bindings,chatId,scratch" ||
+          !scratch || Object.keys(scratch).toSorted().join(",") !== "bindingName,worktreeId" ||
+          !bindings || !Number.isSafeInteger(row["chatId"]) || Number(row["chatId"]) < 0 ||
+          key !== "chatContext:" + keyString(Number(row["chatId"])) ||
+          !saved.has("chatMeta:" + keyString(Number(row["chatId"]))) ||
+          !Number.isSafeInteger(scratch["worktreeId"]) || Number(scratch["worktreeId"]) < 0 ||
+          typeof scratch["bindingName"] !== "string" ||
+          bindings[scratch["bindingName"]] !== scratch["worktreeId"])
+        throw new Error("Invalid scratch chat context.");
+      validateBindingName(scratch["bindingName"]);
+      for (const [name, id] of Object.entries(bindings)) {
+        validateBindingName(name);
+        const target = Number.isSafeInteger(id) && Number(id) >= 0
+          ? objectRow(saved.get("gadgets:" + keyString(Number(id)))) : undefined;
+        if (!target || (target["type"] !== "gadget" &&
+            !(target["type"] === "worktree" && target["chatId"] === row["chatId"] &&
+              id === scratch["worktreeId"])))
+          throw new Error("Invalid scratch chat binding.");
+      }
+      const worktree = objectRow(saved.get("gadgets:" + keyString(Number(scratch["worktreeId"]))));
+      if (worktree?.["type"] !== "worktree" || worktree["chatId"] !== row["chatId"])
+        throw new Error("Invalid scratch worktree owner.");
+    }
+    if (key.startsWith("gadgets:") && row?.["type"] === "worktree") {
+      const context = Number.isSafeInteger(row["chatId"]) && Number(row["chatId"]) >= 0
+        ? objectRow(saved.get("chatContext:" + keyString(Number(row["chatId"])))) : undefined;
+      const scratch = objectRow(context?.["scratch"]);
+      if (Object.keys(row).toSorted().join(",") !==
+          "baseCommit,chatId,created,headCommit,id,pinBase,title,type" ||
+          scratch?.["worktreeId"] !== row["id"] || !(row["created"] instanceof Date) ||
+          typeof row["title"] !== "string" || row["title"].length > 256 ||
+          ["baseCommit", "headCommit", "pinBase"].some(field =>
+            typeof row[field] !== "string" || !/^[0-9a-f]{40}$/.test(row[field]) ||
+            !saved.has("gitObjects:" + row[field])))
+        throw new Error("Incomplete scratch worktree snapshot.");
+    }
+  }
+}
+
 /** Durably journal a capture, then freeze each gadget before yielding to inspector RPC. */
 export async function exportWorkspaceSnapshot(
   ctx: DurableObjectState,
@@ -86,15 +169,14 @@ export async function exportWorkspaceSnapshot(
       throw new Error("Spawned chat scopes need a separate export contract.");
   };
   assertChatScopes();
-  const gadgets = [...storage.gadgets.list()];
+  const workpieces = [...storage.gadgets.list()];
+  const gadgets = workpieces.filter(g => g.type === "gadget");
   if (
-    gadgets.length > 16 ||
-    gadgets.some(
-      (g) =>
-        g.type !== "gadget" || g.pending || Object.values(g.bindings).some((edge) => edge.pending),
-    ) ||
+    workpieces.length > 16 ||
+    workpieces.some(g => g.pending) ||
+    gadgets.some(g => Object.values(g.bindings).some(edge => edge.pending)) ||
     [...storage.chatMeta.list()].some(
-      (chat) => chat.proposedChangeWorkpieces?.length || chat.hasProposedChanges,
+      (chat) => chat.codeBase?.pins.length || chat.proposedChangeWorkpieces?.length || chat.hasProposedChanges,
     )
   )
     throw new Error("Commit gadget changes before exporting this workspace.");
@@ -107,17 +189,13 @@ export async function exportWorkspaceSnapshot(
     gadgets: [],
   };
   let recordBytes = size(snapshot);
-  for (const [key, value] of ctx.storage.kv.list()) {
-    if (!retained(key)) continue;
-    const pair: WorkspaceSnapshot["records"][number] = [
-      key,
-      encodePortable(businessRow(key, value)),
-    ];
+  for (const pair of snapshotRows(ctx, storage)) {
     recordBytes += size(pair) + 1;
     snapshot.records.push(pair);
     if (recordBytes > WORKSPACE_SNAPSHOT_MAX_BYTES)
       throw new Error("Workspace snapshot exceeds 2 MiB.");
   }
+  validateScratchRows(new Map(snapshot.records.map(([key, value]) => [key, decodePortable(value)])));
   const base = crypto.randomUUID();
   const journal = "_vault_snapshot_" + base;
   const copies = gadgets.map((g) => ({ id: g.id, name: journal + "_" + g.id }));
@@ -132,7 +210,7 @@ export async function exportWorkspaceSnapshot(
       ctx.storage.kv.delete(key);
     }
   }
-  const before = JSON.stringify(snapshot.records);
+  const before = snapshot.records.map(pair => JSON.stringify(pair));
   const assertUnchanged = () => {
     if (
       storage.ownerId.get() !== captureOwner ||
@@ -143,11 +221,12 @@ export async function exportWorkspaceSnapshot(
     if ([...storage.activeAgents.list()].length || [...storage.pendingAgentCalls.list()].length)
       throw new Error("Workspace started execution during snapshot. Try again.");
     assertChatScopes();
-    const current = [...ctx.storage.kv.list()]
-      .filter(([key]) => retained(key))
-      .map(([key, value]) => [key, encodePortable(businessRow(key, value))]);
-    if (JSON.stringify(current) !== before)
-      throw new Error("Workspace changed during snapshot. Try again.");
+    let index = 0;
+    for (const pair of snapshotRows(ctx, storage)) {
+      if (JSON.stringify(pair) !== before[index++])
+        throw new Error("Workspace changed during snapshot. Try again.");
+    }
+    if (index !== before.length) throw new Error("Workspace changed during snapshot. Try again.");
   };
   try {
     // Make every planned name durable before creating any private copy. A crash can then
@@ -216,7 +295,9 @@ export async function restoreWorkspaceSnapshot(
   if (!/^[0-9a-f]{64}$/.test(ownerId)) throw new Error("Invalid restore owner.");
   const ids = new Set(snapshot.gadgets.map((g) => g.id));
   const gadgetIds = new Set<number>();
-  const counters = { gadgets: "nextGatekeeperId", chatMeta: "nextChatId", actions: "nextActionId" };
+  validateScratchRows(saved);
+  const counters = { gadgets: "nextGatekeeperId", chatMeta: "nextChatId",
+    chatContext: "nextChatId", actions: "nextActionId" };
   for (const counter of [...Object.values(counters), "nextHookId", "nextAgentCallId"]) {
     // Typed-storage defaults are not physically written until the first allocation.
     if (!saved.has(counter)) {
@@ -243,7 +324,7 @@ export async function restoreWorkspaceSnapshot(
       throw new Error("Invalid snapshot hook counter.");
     const numericKey = ["gadgets", "chatMeta", "actions"].includes(collection)
       ? row["id"]
-      : ["nextChatSequences", "chatChangeBoundaries"].includes(collection)
+      : ["nextChatSequences", "chatChangeBoundaries", "chatContext"].includes(collection)
         ? row["chatId"]
         : undefined;
     if (
@@ -260,6 +341,10 @@ export async function restoreWorkspaceSnapshot(
     )
       throw new Error("Invalid snapshot counter.");
     if (collection === "gadgets") {
+      if (row["type"] === "worktree") {
+        if (ids.has(Number(row["id"]))) throw new Error("Scratch worktrees cannot have facets.");
+        continue;
+      }
       const id = Number(row["id"]);
       if (
         row["type"] !== "gadget" ||
@@ -298,7 +383,7 @@ export async function restoreWorkspaceSnapshot(
   }
   if (gadgetIds.size !== ids.size) throw new Error("Missing gadget snapshot.");
   const defaultId = saved.get("defaultGadgetId");
-  if (defaultId !== undefined && (!Number.isSafeInteger(defaultId) || Number(defaultId) < 0))
+  if (defaultId !== undefined && (!Number.isSafeInteger(defaultId) || !gadgetIds.has(Number(defaultId))))
     throw new Error("Invalid default gadget.");
   const names = snapshot.gadgets.map((g) => (g.id === defaultId ? "gadget" : "gadget" + g.id));
   ctx.storage.kv.put("_vault_restore_pending", { digest, ownerId, names });
@@ -312,6 +397,10 @@ export async function restoreWorkspaceSnapshot(
     ctx.storage.transactionSync(() => {
       for (const [key, value] of records) {
         if (key.startsWith("gadgets:")) {
+          if (objectRow(value)?.["type"] === "worktree") {
+            ctx.storage.kv.put(key, value);
+            continue;
+          }
           if (!value || typeof value !== "object" || !("type" in value) || value.type !== "gadget")
             throw new Error("Unsupported workpiece.");
           const row = value as Record<string, unknown>,

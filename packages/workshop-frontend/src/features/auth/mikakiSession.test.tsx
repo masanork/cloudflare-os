@@ -44,7 +44,7 @@ it('ignores old localStorage credentials in Mikaki mode and waits for cookie aut
   const authenticate = vi.fn<() => void>()
   const dispose = vi.fn<() => void>()
   const createAuth = () => ({ whoami: async () => ({ type: 'user', id: 'mikaki-id', name: 'Owner' }),
-    [Symbol.dispose]: dispose })
+    onRpcBroken: vi.fn<() => void>(), [Symbol.dispose]: dispose })
   const authenticateFromMikaki = vi.fn<typeof createAuth>(createAuth)
   const publicApi = { authenticate, authenticateFromMikaki } as unknown as Parameters<typeof useAuth>[0]
   let authenticated = false

@@ -52,15 +52,17 @@ running; supervisor changes during capture refuse that attempt. Each facet is
 individually frozen, without claiming a transaction across all application DOs.
 
 The version-1 portable snapshot is bounded to 2 MiB minus 29 bytes of Vault
-framing, 16 gadgets, 10,000 supervisor records and 10,000 rows/entries per SQL
+framing, 16 workpieces (gadgets and attachment scratch worktrees), 10,000 supervisor records and 10,000 rows/entries per SQL
 table/KV store. SQL databases above 8 MiB fail before scanning. Dates, bytes,
 undefined, arrays, objects, maps and sets have explicit tags; RPC capabilities,
 virtual tables and unsupported values fail rather than being silently omitted.
 SQL row IDs, ordinary schemas, generated columns and AUTOINCREMENT high-water
 marks are retained. Runtime bookkeeping tables are excluded. Finish
 agents/actions and queued agent calls and commit proposed changes first;
-provisional gadgets/bindings and current or deleted private worktrees refuse
-export until a separate private-worktree contract exists.
+provisional gadgets/bindings refuse export. Attachment scratch worktrees retain their
+Git files, owning chat and local binding map without creating executable facets or
+copying live agent context. Other private worktrees and deleted-worktree archives
+refuse export until a separate private-worktree contract exists.
 Spawned/callable agent chat scopes also refuse export until their frozen
 capabilities have a separate portable contract. Callback history is retained
 without bindings to omitted argument capabilities. SQL import refuses

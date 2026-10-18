@@ -24,8 +24,9 @@
 // Gadget a stub pointing to the Gadget's server-side Durable Object interface.
 
 import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
-import { AccountDescription, ActionKind, ActionDescription, AgentCatalog, AvatarImage, GatekeeperUiFrame, ObservationDescription, ResourceDescription, ResourceConfiguratorFrame, SupportedResource, VendorDescription, HookDescription } from "./gatekeeper.js";
+import { AccountDescription, ActionKind, ActionDescription, AgentCatalog, AvatarImage, GatekeeperUiFrame, GatekeeperUserSelection, ObservationDescription, ResourceDescription, ResourceConfiguratorFrame, SupportedResource, VendorDescription, HookDescription } from "./gatekeeper.js";
 import type { CodeChange } from "./code-change.js";
+import type { GitOid } from "./gatekeeper.js";
 import type { UiFeatureFlags } from "./feature-flags.js";
 
 export const SERVICE_SALT = new Uint8Array([
@@ -198,6 +199,9 @@ export type UserNotification = {
   /** Current human-readable chat title. */
   chatTitle: string;
 };
+
+/** How long a workspace's notifications stay muted: until a time, or until the user unmutes it. */
+export type NotificationMute = { until: Date, indefinite?: never } | { indefinite: true, until?: never };
 
 /** Callback used by `AuthenticatedApi.subscribeToNotifications()`. */
 export interface NotificationSubscriber extends RpcTarget {
@@ -526,6 +530,12 @@ export interface AuthenticatedApi extends RpcTarget {
       subscriber: RpcStub<NotificationSubscriber>): Promise<RpcStub<{}>>;
 
   /**
+   * Mute a workspace in the user's list, so its finished tasks notify no tab or device, or unmute
+   * it with null. Permission requests still come through.
+   */
+  setWorkspaceNotificationMute(workspaceId: string, mute: NotificationMute | null): Promise<void>;
+
+  /**
    * List the user's configured AI models of one kind, by default the language models, which can
    * chat.
    *
@@ -747,6 +757,8 @@ export interface AuthenticatedApi extends RpcTarget {
    * on a connected account, expanding if needed. Returns a flow to open as a disowned popup (as for
    * connectAccount()) to authorize them, or null if nothing was needed. Completion is redeemed via
    * completeConnectHandoff(); the updated grant is then observable via subscribeConnectedAccounts().
+   * Returning null also re-reads the account's description, so a list of granted resource types
+   * that was out of date is corrected and observable the same way.
    */
   ensureAccountResources(accountId: number, resourceUrlPatterns: string[]): Promise<ConnectFlowStart | null>;
 
@@ -906,6 +918,16 @@ export interface AuthenticatedApi extends RpcTarget {
    * in a sandboxed iframe and exposes `ui` to it over a MessagePort RPC session.
    */
   getGatekeeperApp(id: string): Promise<GatekeeperUiFrame | null>;
+
+  /**
+   * Mint a single-use ticket for a user selected on behalf of a gatekeeper app,
+   * redeemable through that gatekeeper app's exchange capability (see
+   * GatekeeperUserSelectionExchangeImpl). Returns null if the selected user is
+   * this user or does not exist.
+   */
+  createGatekeeperUserSelection(
+      vendorId: string, selectedUserId: string,
+  ): Promise<GatekeeperUserSelection | null>;
 
   // --- Deployment admin ---
 
@@ -2023,6 +2045,9 @@ export type GadgetMetadata = {
   /** Whether the user has pinned this gadget to the top of their list. */
   pinned?: boolean;
 
+  /** Set while the user has muted this workspace's notifications. */
+  notificationMute?: NotificationMute;
+
   /**
    * Set when the gadget is not owned by the current user. Presence of this field indicates the
    * user is a collaborator, not the owner.
@@ -2848,13 +2873,13 @@ export interface Overseer extends RpcTarget {
                   formats?: MessageFormatRef[]): Promise<void>;
 
   /**
-   * Upload an attachment for use in a future chat message. This way by the time the user wants to
-   * send the message, likely uploading is complete. `modelId` determines whether the
-   * selected provider can receive a raw file attachment.
-   *
-   * Pass the returned handle to newChat() or sendChatMessage() to commit the attachment into chat history.
+   * Store raw bytes as an immutable Git blob and return its OID after durable storage.
+   * Retrying identical bytes returns the same OID. This does not change any worktree or message.
+   * Use the OID in a chat attachment, or in a worktree's whole-file `setBytes` change together
+   * with the payload's byte length. The blob must be present in this workspace's Git store.
+   * Limited to 8,000,000 bytes; larger-file support is deferred.
    */
-  uploadChatAttachment(attachment: ChatAttachmentUpload, modelId: string | null): Promise<ChatAttachmentHandle>;
+  uploadBlob(content: Uint8Array): Promise<GitOid>;
 
   /**
    * Fetch the bytes of a committed chat attachment over RPC. The canonical metadata is already
@@ -2862,9 +2887,6 @@ export interface Overseer extends RpcTarget {
    * only to download non-image attachments on demand.
    */
   getChatAttachmentContent(chatId: number, id: string): Promise<Uint8Array>;
-
-  /** Delete an uploaded attachment that the user explicitly removed before sending the message. */
-  deleteChatAttachment(id: string): Promise<void>;
 
   /**
    * Update the title of a chat. Usually not needed as a title is generated automatically from
@@ -3816,14 +3838,15 @@ export type AiChatMessageBody = {
   type: "useGadget";
 } | {
   /**
-   * The catalogs of always-available resources changed after the agent's system prompt listed
-   * them, e.g. a skill was added to the Context Library. The agent writes this before the model
-   * request that first sees the change, and tells the model what changed, so the system prompt can
-   * stay the same for the whole chat. Clients show nothing for it.
+   * The always-available resources changed after the agent's system prompt listed them: a
+   * catalog changed, e.g. a skill was added to the Context Library, or the chat gained a resource,
+   * e.g. the owner turned on Web Search. The agent writes this before the model request that first
+   * sees the change, and tells the model what changed, so the system prompt can stay the same for
+   * the whole chat. Clients show nothing for it.
    */
   type: "catalogChange";
 
-  /** Each changed resource, as it is now. */
+  /** Each changed or new resource, as it is now. */
   resources: AlwaysAvailableResource[];
 } | {
   /**
@@ -3860,9 +3883,10 @@ export type AiChatMessageBody = {
   bindingName?: string;
 } | {
   /**
-   * **Obsolete.** A system-generated nudge message that was sent to the agent when it tried to
-   * end its turn while agent callbacks were still unresolved. No longer emitted since callable
-   * agents stopped returning values; retained so older chat logs remain readable.
+   * A model-visible control note for an approved-decision handoff, explicit Retry, or Stop.
+   * It also ends the preceding decision segment for recovery. Not rendered in the chat UI:
+   * the decision cards and turn controls already show these transitions to the user.
+   * Older logs used this variant to nudge an agent whose callbacks were still unresolved.
    */
   type: "agentNudge";
   text: string;
@@ -3948,37 +3972,43 @@ export type AlwaysAvailableResource = {
 };
 
 /**
- * Bytes to upload as a chat attachment.
- *
- * The server stores the bytes and returns the handle to pass when sending the message.
- */
-export type ChatAttachmentUpload = {
-  mimeType: string;
-  content: Uint8Array;
-  name?: string;
-};
-
-/**
- * Handle for an attachment that has been uploaded but not yet sent as part of a message.
- *
- * Pass this back unchanged when sending the chat message.
+ * A previously uploaded blob to attach to a chat message, with display/model-input metadata.
+ * The blob must be present in this workspace's Git store. Attachment limits and MIME signatures
+ * are checked when sending. The ID-only variant accepts legacy staged uploads.
  */
 export type ChatAttachmentHandle = {
-  /** Clients must not infer storage paths from this ID or construct handles by hand. */
+  /** Immutable Git blob returned by `uploadBlob()`. */
+  oid: GitOid;
+  /** MIME type of this use of the blob; it does not change the stored bytes. */
+  mimeType: string;
+  /** Original display filename, sanitized when sending. */
+  name?: string;
+} | {
+  /** Legacy staged-upload ID; new clients use a blob OID instead. */
   id: string;
 };
 
 /**
  * Attachment metadata returned to clients.
  *
- * For image attachments, `content` carries the full image bytes inline so the client can render
- * them in the chat without an extra round trip. For other attachments, fetch the bytes on demand
- * via `Overseer.getChatAttachmentContent()`.
+ * For supported inline image formats, `content` carries the image bytes so the client can render
+ * them without an extra round trip. For other attachments, fetch the bytes on demand via
+ * `Overseer.getChatAttachmentContent()`.
  */
-export type ChatAttachmentRef = ChatAttachmentHandle & {
+export type ChatAttachmentRef = {
+  /** Chat-owned attachment identity used for downloads and message rendering. */
+  id: string;
+  /** Original immutable upload blob. Absent on legacy attachments. */
+  oid?: GitOid;
   mimeType: string;
   name?: string;
   size: number;
+
+  /**
+   * Path in the chat's scratch worktree, preserving uploaded bytes for every file format.
+   * Absent only on legacy attachments committed before workspace ingress was introduced.
+   */
+  workspacePath?: string;
 
   /** Inlined bytes for small image attachments. Present only for images. */
   content?: Uint8Array;

@@ -15,6 +15,7 @@ import {
   type GitCache,
   type GitOid,
   type GitPullHints,
+  type GitPullTransfer,
   type ObservationDescription,
   type ResourceConfiguratorFrame,
   type ResourceDescription,
@@ -71,11 +72,11 @@ import {
   isCommitOid,
   parseGitCommitPayload,
 } from "@gadgets/gatekeeper-kit/git-objects";
+import { startGitPull } from "@gadgets/gatekeeper-kit/git-pull-transfer";
 import {
   GitRefUpdateRejectedError,
   ZERO_OID,
   emptyPackBytes,
-  pullGitObjectsIntoCache,
   pushGitRefUpdate,
   simulateBranchHead,
   validateBranchName,
@@ -3928,21 +3929,13 @@ export class GitHubGatekeeperImpl extends DurableObject<Env, GitHubGatekeeperImp
   }
 
   /**
-   * `Gatekeeper.gitPull()`: fetch the requested objects from this repo over git smart-HTTP
-   * (protocol v2) and deposit them in the workspace git cache. The gatekeeper contributes only
-   * protocol framing -- the kit's git-transport composes the fetch command from the hints and strips
-   * the response down to the raw pack body, which streams into `cache.consumePack()` for
-   * overseer-side decoding, hash verification, and storage -- and retains nothing locally.
-   *
-   * No observation is recorded: a pull is overseer-initiated population of the workspace cache
-   * with objects whose commit ids were already returned (and advertised) by observed session
-   * reads, not a new agent-visible read; observer access to the git data rides the same
-   * repo-level ACL as everything else here (strategy B).
+   * Stream a self-contained raw pack through this resource's authenticated transport.
+   * No new observation: the kernel only requests objects from previously observed commits.
+   * Cache ingestion and native checkout share this path; credentials never enter the guest.
    */
-  async gitPull(oids: GitOid[], cache: RpcStub<GitCache>, hints: GitPullHints): Promise<void> {
-    await this.#withApi(api => pullGitObjectsIntoCache(
-      body => api.fetchGitUploadPack(this.ctx.props.owner, this.ctx.props.repo, body),
-      oids, hints, cache));
+  async gitPull(oids: GitOid[], options: GitPullHints): Promise<GitPullTransfer> {
+    return this.#withApi(api => startGitPull(
+      body => api.fetchGitUploadPack(this.ctx.props.owner, this.ctx.props.repo, body), oids, options));
   }
 
   async applyAction(actionId: number, cache: RpcStub<GitCache>): Promise<void> {

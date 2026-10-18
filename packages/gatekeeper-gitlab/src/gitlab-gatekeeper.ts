@@ -18,10 +18,12 @@ import {
   type GitCache,
   type GitOid,
   type GitPullHints,
+  type GitPullTransfer,
   type ResourceDescription,
   stripTrailingSlashes,
 } from "@gadgets/workshop-shared/gatekeeper";
 import { ArrayCursor } from "@gadgets/gatekeeper-kit/cursors";
+import { startGitPull } from "@gadgets/gatekeeper-kit/git-pull-transfer";
 import {
   MAX_DIFF_BLOB_BYTES,
   changedPathsBetweenTrees,
@@ -36,7 +38,6 @@ import {
   GitRefUpdateRejectedError,
   ZERO_OID,
   emptyPackBytes,
-  pullGitObjectsIntoCache,
   pushGitRefUpdate,
   simulateBranchHead,
 } from "@gadgets/gatekeeper-kit/git-transport";
@@ -2651,21 +2652,13 @@ export class GitLabGatekeeperImpl extends DurableObject<Env, GitLabGatekeeperImp
   // -- git: pull, push, and the simulation of queued pushes -------------------------------
 
   /**
-   * `Gatekeeper.gitPull()`: fetch the requested objects from this project over git smart-HTTP
-   * (protocol v2) and deposit them in the workspace git cache. The gatekeeper contributes only
-   * protocol framing -- the kit's transport composes the fetch command from the hints and strips
-   * the response down to the raw pack body, which streams into `cache.consumePack()` for
-   * overseer-side decoding, hash verification, and storage -- and retains nothing locally.
-   *
-   * No observation is recorded: a pull is overseer-initiated population of the workspace cache
-   * with objects whose commit ids were already returned (and advertised) by observed session
-   * reads, not a new agent-visible read; observer access to the git data rides the same
-   * project-level ACL as everything else here (strategy B).
+   * Stream a self-contained raw pack through this resource's authenticated transport.
+   * No new observation: the kernel only requests objects from previously observed commits.
+   * Cache ingestion and native checkout share this path; credentials never enter the guest.
    */
-  async gitPull(oids: GitOid[], cache: RpcStub<GitCache>, hints: GitPullHints): Promise<void> {
-    const projectPath = this.#projectPath();
-    await this.#withApi(api => pullGitObjectsIntoCache(
-      body => api.fetchGitUploadPack(projectPath, body), oids, hints, cache));
+  async gitPull(oids: GitOid[], options: GitPullHints): Promise<GitPullTransfer> {
+    return this.#withApi(api => startGitPull(
+      body => api.fetchGitUploadPack(this.#projectPath(), body), oids, options));
   }
 
   /**

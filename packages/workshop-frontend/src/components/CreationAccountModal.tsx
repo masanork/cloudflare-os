@@ -8,6 +8,8 @@ import type { GatekeeperUiFrame } from '@gadgets/workshop-shared/gatekeeper'
 import { useAuthenticatedApi } from '../AuthContext'
 import { AccountsSubscriberAdapter, type AccountEvent } from '../accountsSubscriber'
 import { openConnectWindow } from '../connectHandoff'
+import { requestAccountResources } from '../requestAccountResources'
+import { AuthPopupCancelledError } from '../features/native-app/authPopup'
 import { AccountChooser } from '../gatekeeper-modal/AccountChooser'
 import ResourceConfiguratorHost from '../ResourceConfiguratorHost'
 import { disposeConfiguratorFrame } from '../disposeConfiguratorFrame'
@@ -76,7 +78,13 @@ export const CreationAccountModal = ({ overseer, gatekeeperId, onChoose, onCance
     let cancelled = false
     const subscription = authenticatedApi.subscribeConnectedAccounts(new AccountsSubscriberAdapter({
       add(account) {
-        if (!cancelled) setAccounts(prev => [...prev.filter(a => a.id !== account.id), account])
+        // An update keeps its place, so the default selection (the first usable account) does not
+        // move to another account and restart the configurator when a grant arrives.
+        if (!cancelled) {
+          setAccounts(prev => prev.some(a => a.id === account.id)
+            ? prev.map(a => a.id === account.id ? account : a)
+            : [...prev, account])
+        }
       },
       remove(id) {
         if (!cancelled) setAccounts(prev => prev.filter(a => a.id !== id))
@@ -96,15 +104,16 @@ export const CreationAccountModal = ({ overseer, gatekeeperId, onChoose, onCance
     }
   }, [authenticatedApi])
 
-  // The popup redeems the flow itself; a new or restored account arrives through the subscription.
+  // Desktop redeems in the popup; native awaits in-app redemption. Both notify the subscription.
   const startFlow = async (flow: StartingFlow, start: () => Promise<ConnectFlowStart | null>) => {
     setStarting(flow)
     try {
       const started = await start()
-      if (started) openConnectWindow(started)
+      if (started) await openConnectWindow(started, authenticatedApi)
     } catch (err) {
+      if (err instanceof AuthPopupCancelledError) return
       console.error('Failed to start connection flow:', err)
-      toasts.add({ title: 'Failed to start connection flow', variant: 'error' })
+      toasts.add({ title: err instanceof Error ? err.message : 'Could not complete connection flow', variant: 'error' })
     } finally {
       setStarting(null)
     }
@@ -215,6 +224,10 @@ export const CreationAccountModal = ({ overseer, gatekeeperId, onChoose, onCance
                   disabled={false}
                   onCollectResourceUrlChange={onCollectorChange}
                   onSelectionReadyChange={setConfiguratorReady}
+                  onEnsureResources={frame
+                    ? patterns => requestAccountResources(
+                      authenticatedApi, toasts, configuratorAccountId, patterns)
+                    : undefined}
                 />
               )}
             </div>
