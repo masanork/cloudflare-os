@@ -4,6 +4,7 @@ import { PublicApi, AuthenticatedApi } from '@gadgets/workshop-shared/api'
 import { setReportedUserId } from './errorReporting'
 import { MIKAKI_AUTH_MODE, loadMikakiSession, endMikakiSession } from './features/auth/mikakiSession'
 import { NativeConnectSession } from './features/native-app/connectSession'
+import { WorkspaceVaultSession } from './features/chat/workspaceVaultSession'
 
 const CF_ACCESS_MODE = !MIKAKI_AUTH_MODE && import.meta.env.VITE_CF_ACCESS_MODE === 'true'
 
@@ -17,7 +18,8 @@ interface AuthState {
 export { CF_ACCESS_MODE }
 
 export function useAuth(publicApi: RpcStub<PublicApi>) {
-  const [nativeConnectSession] = useState(() => new NativeConnectSession())
+  const [authenticatedSession] = useState(() => new NativeConnectSession<RpcStub<AuthenticatedApi>>())
+  const [workspaceVault] = useState(() => new WorkspaceVaultSession(authenticatedSession))
   const [authState, setAuthState] = useState<AuthState>({
     token: null,
     authenticatedApi: null,
@@ -29,6 +31,8 @@ export function useAuth(publicApi: RpcStub<PublicApi>) {
   // State closures go stale in cleanup functions, so we use a ref.
   const authenticatedApiRef = useRef<RpcStub<AuthenticatedApi> | null>(null)
   authenticatedApiRef.current = authState.authenticatedApi
+
+  useEffect(() => () => authenticatedSession.end(), [authenticatedSession])
 
   /**
    * Names the signed-in user on error reports, for as long as this stub is the current one.
@@ -52,13 +56,13 @@ export function useAuth(publicApi: RpcStub<PublicApi>) {
     if (!authenticatedApi) return
     let cancelled = false
     const identity = authenticatedApi.whoami()
-    const untrack = nativeConnectSession.track(authenticatedApi, identity)
+    const untrack = authenticatedSession.track(authenticatedApi, identity)
     identity.then((info) => {
       // Only a real user account names a person: for a gadget author `id` is its owner's id.
       if (!cancelled && info.type === 'user') setReportedUserId(info.id)
     }).catch(() => {})
     return () => { cancelled = true; untrack() }
-  }, [authState.authenticatedApi, nativeConnectSession])
+  }, [authState.authenticatedApi, authenticatedSession])
 
   useEffect(() => {
     if (MIKAKI_AUTH_MODE) {
@@ -68,6 +72,7 @@ export function useAuth(publicApi: RpcStub<PublicApi>) {
       loadMikakiSession(false, controller.signal).then(async result => {
         if (controller.signal.aborted) return
         if (!result.signedIn) {
+          authenticatedSession.end()
           setAuthState({ token: null, authenticatedApi: null, isLoading: false, error: null })
           return
         }
@@ -79,6 +84,7 @@ export function useAuth(publicApi: RpcStub<PublicApi>) {
       }).catch(() => {
         if (!controller.signal.aborted) {
           pendingApi?.[Symbol.dispose]()
+          authenticatedSession.end()
           setAuthState({ token: null, authenticatedApi: null, isLoading: false, error: null })
         }
       })
@@ -150,6 +156,7 @@ export function useAuth(publicApi: RpcStub<PublicApi>) {
   }
 
   const logout = () => {
+    authenticatedSession.end()
     setReportedUserId(undefined)
 
     if (MIKAKI_AUTH_MODE) {
@@ -185,6 +192,7 @@ export function useAuth(publicApi: RpcStub<PublicApi>) {
 
   return {
     ...authState,
+    workspaceVault,
     login,
     logout,
     isAuthenticated: !!authState.authenticatedApi

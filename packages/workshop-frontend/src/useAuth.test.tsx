@@ -32,6 +32,7 @@ function stubPublicApi(author?: AiChatAuthorInfo): RpcStub<PublicApi> {
   return {
     authenticate: () => authenticated,
     authenticateFromCfAccess: () => authenticated,
+    authenticateFromMikaki: () => authenticated,
   } as unknown as RpcStub<PublicApi>
 }
 
@@ -221,5 +222,54 @@ describe('useAuth error reporting identity', () => {
     await complete('a'.repeat(64), new AbortController().signal)
     expect(first.completeConnectHandoff).not.toHaveBeenCalled()
     expect(next.completeConnectHandoff).toHaveBeenCalledExactlyOnceWith('a'.repeat(64), 'b'.repeat(64))
+  })
+
+  it('keeps a Vault transfer through Mikaki reauthentication and cancels when the cookie session ends', async () => {
+    vi.stubEnv('VITE_MIKAKI_AUTH_MODE', 'true')
+    vi.resetModules()
+    const { useAuth: useMikakiAuth } = await import('./useAuth')
+    const sender = await import('./features/chat/vaultWorkspace')
+    let deliver!: (transfer: Awaited<ReturnType<typeof sender.transferWorkspace>>) => void
+    const transfer = vi.spyOn(sender, 'transferWorkspace')
+      .mockImplementation(() => new Promise(resolve => { deliver = resolve }))
+    let reauthenticated!: (response: Response) => void
+    const fetch = vi.fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(Response.json({ signedIn: true, csrf: 'csrf' }))
+      .mockImplementationOnce(() => new Promise(resolve => { reauthenticated = resolve }))
+      .mockResolvedValueOnce(Response.json({ signedIn: false, csrf: 'csrf' }))
+    vi.stubGlobal('fetch', fetch)
+    let current: ReturnType<typeof useMikakiAuth> | undefined
+    const Consumer = ({ api }: { api: RpcStub<PublicApi> }) => {
+      current = useMikakiAuth(api)
+      return <span>{current.isLoading ? 'Loading' : 'Ready'}</span>
+    }
+    const container = document.createElement('div')
+    document.body.append(container)
+    containers.push(container)
+    const root = createRoot(container)
+    roots.push(root)
+    try {
+      await act(async () => root.render(<Consumer api={stubPublicApi(person)} />))
+      const vault = current!.workspaceVault
+      const pending = vault.start('source-id', new URL('https://mikaki.example/vault'), 'restore', () => {})
+      const signal = transfer.mock.calls[0][3]
+      await act(async () => root.render(<Consumer api={stubPublicApi(person)} />))
+      expect(container.textContent).toBe('Loading')
+      expect(current!.workspaceVault).toBe(vault)
+      expect(signal.aborted).toBe(false)
+      await act(async () => reauthenticated(Response.json({ signedIn: true, csrf: 'csrf' })))
+      expect(current!.isAuthenticated).toBe(true)
+      expect(vault.snapshot().busy).toBe(true)
+      expect(signal.aborted).toBe(false)
+      await act(async () => root.render(<Consumer api={stubPublicApi(person)} />))
+      expect(current!.isAuthenticated).toBe(false)
+      expect(signal.aborted).toBe(true)
+      deliver({ snapshot: 'never imported', restored: vi.fn<() => void>() })
+      await pending
+      expect(vault.snapshot()).toEqual({ workspaceId: '', busy: false, status: '', retry: false })
+    } finally {
+      transfer.mockRestore()
+      vi.unstubAllGlobals()
+    }
   })
 })

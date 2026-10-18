@@ -1893,7 +1893,7 @@ export default function GadgetEditor() {
           {overseer ? (
             <div className="flex-1 min-h-0 relative">
               <div className={layoutModeReady ? 'h-full flex flex-col' : 'h-full flex flex-col invisible'}>
-                {!metadata.owner && <WorkspaceVault key={id} reader={overseer.stub} />}
+                {!metadata.owner && <WorkspaceVault key={id} workspaceId={id!} />}
                 <div className="flex-1 min-h-0"><ChatInterface
                   key={id}
                   workspaceId={id}

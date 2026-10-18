@@ -1,96 +1,25 @@
-import { useEffect, useRef, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@cloudflare/kumo";
-import type { Overseer } from "@gadgets/workshop-shared/api";
 import { useAuthenticatedApi } from "../../AuthContext";
 import { vaultDestination } from "./vaultArchive";
-import { transferWorkspace, type WorkspaceTransfer } from "./vaultWorkspace";
+import type { WorkspaceVaultSession } from "./workspaceVaultSession";
 
-export const WorkspaceVault = ({
-  reader,
-}: {
-  reader: Pick<Overseer, "exportWorkspaceSnapshot">;
+const WorkspaceVaultControls = ({ workspaceId, workspaceVault }: {
+  workspaceId: string; workspaceVault: WorkspaceVaultSession;
 }) => {
   const destination = vaultDestination(import.meta.env.VITE_MIKAKI_VAULT_URL);
-  const { authenticatedApi } = useAuthenticatedApi();
+  const state = useSyncExternalStore(workspaceVault.subscribe, workspaceVault.snapshot);
+  const [open, setOpen] = useState(state.busy || state.retry);
   const navigate = useNavigate();
-  const [busy, setBusy] = useState(false),
-    [status, setStatus] = useState(""),
-    [retry, setRetry] = useState(false);
-  const control = useRef<AbortController | null>(null);
-  // Kept only for this mounted view. An uncertain response retries the exact same operation.
-  const pending = useRef<{
-    transfer: WorkspaceTransfer;
-    snapshot: string;
-    operationId: string;
-  } | null>(null);
-  useEffect(
-    () => () => {
-      control.current?.abort();
-      pending.current = null;
-    },
-    [],
-  );
   if (!destination) return null;
-  const restorePending = async (signal: AbortSignal) => {
-    const attempt = pending.current;
-    if (!attempt) throw new Error("Choose a snapshot first.");
-    const id = await authenticatedApi.newGadgetFromWorkspaceSnapshot(
-      attempt.snapshot,
-      attempt.operationId,
-    );
-    if (signal.aborted) return;
-    attempt.transfer.restored();
-    pending.current = null;
-    setRetry(false);
-    setStatus("A new workspace was restored. Reconnect external services there.");
-    void navigate({ to: "/workspace/$id", params: { id }, search: {} });
-  };
-  const run = async (mode: "save" | "restore") => {
-    if (busy) return;
-    const abort = new AbortController();
-    control.current = abort;
-    setBusy(true);
-    setStatus(
-      mode === "save"
-        ? "Unlock Mikaki and review the workspace copy before saving."
-        : "Unlock Mikaki, choose a saved snapshot and approve sending its contents here.",
-    );
-    try {
-      if (pending.current) await restorePending(abort.signal);
-      else {
-        const transfer = await transferWorkspace(
-          destination,
-          mode,
-          () => reader.exportWorkspaceSnapshot(location.origin),
-          abort.signal,
-        );
-        if (abort.signal.aborted) return;
-        if (mode === "save")
-          setStatus("Mikaki confirmed the encrypted workspace snapshot was saved.");
-        else {
-          if (!transfer.snapshot) throw new Error("No snapshot received.");
-          pending.current = {
-            transfer,
-            snapshot: transfer.snapshot,
-            operationId: crypto.randomUUID(),
-          };
-          await restorePending(abort.signal);
-        }
-      }
-    } catch (error) {
-      if (!abort.signal.aborted) {
-        setRetry(pending.current !== null);
-        setStatus(
-          error instanceof Error ? error.message : "Could not confirm the workspace transfer.",
-        );
-      }
-    } finally {
-      if (!abort.signal.aborted) setBusy(false);
-    }
-  };
+  const run = (mode: "save" | "restore") => workspaceVault.start(
+    workspaceId, destination, mode,
+    id => { void navigate({ to: "/workspace/$id", params: { id }, search: {} }); },
+  );
   return (
-    <details className="shrink-0 border-b border-kumo-line">
+    <details className="shrink-0 border-b border-kumo-line" open={open}
+      onToggle={event => setOpen(event.currentTarget.open)}>
       <summary className="px-4 py-2 text-sm text-kumo-subtle cursor-pointer">
         Workspace in Vault
       </summary>
@@ -99,32 +28,26 @@ export const WorkspaceVault = ({
           <Button
             variant="secondary"
             size="sm"
-            disabled={busy || retry}
+            disabled={state.busy || state.retry}
             onClick={() => void run("save")}
           >
             Save workspace to Vault
           </Button>
-          <Button variant="secondary" size="sm" disabled={busy} onClick={() => void run("restore")}>
-            {retry ? "Retry the same restore" : "Restore workspace from Vault"}
+          <Button variant="secondary" size="sm" disabled={state.busy} onClick={() => void run("restore")}>
+            {state.retry ? "Retry the same restore" : "Restore workspace from Vault"}
           </Button>
-          {retry && (
+          {state.retry && (
             <Button
               variant="secondary"
               size="sm"
-              disabled={busy}
-              onClick={() => {
-                pending.current = null;
-                setRetry(false);
-                setStatus(
-                  "Pending restore discarded. If the earlier request completed, its workspace remains in your workspace list. You can now choose another snapshot.",
-                );
-              }}
+              disabled={state.busy}
+              onClick={() => workspaceVault.discard()}
             >
               Discard pending restore
             </Button>
           )}
         </div>
-        {retry && (
+        {state.retry && (
           <p className="text-xs text-kumo-subtle">
             Retry safely repeats the same restore. Before discarding it, check your workspace list
             in case the earlier request completed.
@@ -135,12 +58,17 @@ export const WorkspaceVault = ({
           agents and commit changes first. External connections and sharing must be configured
           again.
         </p>
-        {status && (
+        {state.status && (
           <p className="text-xs text-kumo-subtle" role="status">
-            {status}
+            {state.status}
           </p>
         )}
       </div>
     </details>
   );
+};
+
+export const WorkspaceVault = ({ workspaceId }: { workspaceId: string }) => {
+  const { workspaceVault } = useAuthenticatedApi();
+  return workspaceVault ? <WorkspaceVaultControls workspaceId={workspaceId} workspaceVault={workspaceVault} /> : null;
 };

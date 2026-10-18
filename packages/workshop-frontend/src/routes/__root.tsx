@@ -29,8 +29,10 @@ export const Route = createRootRoute({
 function RootComponent() {
   const rpcStub = useRpcStub()
   const connectionLost = useConnectionLost()
-  const { isAuthenticated, authenticatedApi, isLoading, error, logout, login } = useAuth(rpcStub)
+  const { isAuthenticated, authenticatedApi, isLoading, error, logout, login, workspaceVault } = useAuth(rpcStub)
   const pathname = useRouterState({ select: (s) => s.location.pathname })
+
+  useEffect(() => workspaceVault?.setPath(pathname), [workspaceVault, pathname])
 
   // Routes that don't require auth (public routes)
   const isSignup = pathname === '/signup' && !MIKAKI_AUTH_MODE
@@ -122,7 +124,7 @@ function RootComponent() {
     return <DeviceSessionHandoff authenticatedApi={authenticatedApi} />
   }
   return (
-    <AuthProvider authenticatedApi={authenticatedApi} onLogout={logout}>
+    <AuthProvider authenticatedApi={authenticatedApi} onLogout={logout} workspaceVault={workspaceVault}>
       <FeatureFlagsProvider>
         <TooltipProvider>
           <Toasty>

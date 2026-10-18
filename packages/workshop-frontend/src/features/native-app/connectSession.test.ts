@@ -39,6 +39,19 @@ describe('native connect session ownership', () => {
     expect(next.completeConnectHandoff).toHaveBeenCalledExactlyOnceWith(ticket, nonce)
   })
 
+  it('waits through authentication cleanup until this owner has a replacement API', async () => {
+    const session = new NativeConnectSession(), first = api(), next = api()
+    const untrack = session.track(first, Promise.resolve(person))
+    const complete = nativeConnectCompletion(first, nonce)
+    untrack()
+    const completion = complete(ticket, signal())
+    await flush()
+    expect(first.completeConnectHandoff).not.toHaveBeenCalled()
+    session.track(next, Promise.resolve(person))
+    await completion
+    expect(next.completeConnectHandoff).toHaveBeenCalledExactlyOnceWith(ticket, nonce)
+  })
+
   it('retries a redemption interrupted by a broken transport, but only on its replacement', async () => {
     const session = new NativeConnectSession(), first = api(), next = api()
     let reject!: (error: Error) => void
@@ -63,6 +76,21 @@ describe('native connect session ownership', () => {
     expect(first.completeConnectHandoff).toHaveBeenCalledOnce()
   })
 
+  it('does not redeem a successful single-use ticket again if the API changes before its reply settles', async () => {
+    const session = new NativeConnectSession(), first = api(), next = api()
+    let done!: () => void
+    first.completeConnectHandoff.mockImplementation(() => new Promise(resolve => { done = resolve }))
+    session.track(first, Promise.resolve(person))
+    const completion = nativeConnectCompletion(first, nonce)(ticket, signal())
+    await flush()
+    first.break()
+    session.track(next, Promise.resolve(person))
+    done()
+    await completion
+    expect(first.completeConnectHandoff).toHaveBeenCalledOnce()
+    expect(next.completeConnectHandoff).not.toHaveBeenCalled()
+  })
+
   it('rejects after a user switch instead of attaching the grant to another user', async () => {
     const session = new NativeConnectSession(), first = api(), next = api()
     session.track(first, Promise.resolve(person))
@@ -74,10 +102,11 @@ describe('native connect session ownership', () => {
 
   it('does not substitute another mounted auth owner, even for the same user', async () => {
     const first = api(), other = api()
-    const untrack = new NativeConnectSession().track(first, Promise.resolve(person))
+    const session = new NativeConnectSession()
+    session.track(first, Promise.resolve(person))
     const complete = nativeConnectCompletion(first, nonce)
     new NativeConnectSession().track(other, Promise.resolve(person))
-    untrack()
+    session.end()
     await expect(complete(ticket, signal())).rejects.toThrow('signed out')
     expect(other.completeConnectHandoff).not.toHaveBeenCalled()
   })
