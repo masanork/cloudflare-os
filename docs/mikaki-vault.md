@@ -89,8 +89,14 @@ caller and operation, stages gadget data, then publishes business rows and
 rebuilt indexes. The original workspace is preserved. Durable owner/digest
 receipts reject changed retries and make identical retries idempotent. After
 an uncertain response, **Retry the same restore** retains that exact snapshot
-and operation ID for the mounted view; nothing stores plaintext in browser
-storage. Losing the view may create a second copy on a later deliberate restore.
+and operation ID within the current sign-in session. A replaced WebSocket or
+workspace loading view keeps the popup transfer and resumes through a fresh API
+only after confirming the initiating user. Transport failures retry the identical
+operation; server rejections remain available for an explicit retry. Signing out,
+changing users or leaving the workspace cancels the transfer and discards its
+pending plaintext. The copy stays in document memory; reloading or closing the
+page discards it, so check the workspace list before starting another restore
+after an uncertain result.
 
 External gatekeeper accounts/resources, shared links, collaborators, observers,
 approval rules, hooks, live agent context/callback arguments, alarms and sessions

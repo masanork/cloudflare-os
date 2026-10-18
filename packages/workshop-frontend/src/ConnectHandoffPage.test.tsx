@@ -4,6 +4,8 @@
 import { act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { AuthenticatedSession } from './features/auth/authenticatedSession'
+import { WorkspaceVaultSession } from './features/chat/workspaceVaultSession'
 import type { RpcStub } from 'capnweb'
 import type { AuthenticatedApi, PublicApi } from '@gadgets/workshop-shared/api'
 
@@ -15,6 +17,7 @@ const testState = vi.hoisted(() => ({
 vi.mock('./useAuth', () => ({
   useAuth: vi.fn<typeof import('./useAuth').useAuth>(() => ({
     token: null, error: null,
+    workspaceVault: new WorkspaceVaultSession(new AuthenticatedSession()),
     isAuthenticated: testState.authenticatedApi !== null,
     authenticatedApi: testState.authenticatedApi,
     isLoading: testState.isLoading,

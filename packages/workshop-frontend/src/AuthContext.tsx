@@ -1,9 +1,11 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
 import { RpcStub } from 'capnweb'
 import { AuthenticatedApi, AiChatAuthorInfo } from '@gadgets/workshop-shared/api'
+import type { WorkspaceVaultSession } from './features/chat/workspaceVaultSession'
 
 interface AuthContextType {
   authenticatedApi: RpcStub<AuthenticatedApi>
+  workspaceVault?: WorkspaceVaultSession
   logout: () => void
   /** Last confirmed user; retained while an API reconnect is being authenticated. */
   currentUser: AiChatAuthorInfo | null
@@ -19,9 +21,10 @@ interface AuthProviderProps {
   children: ReactNode
   authenticatedApi: RpcStub<AuthenticatedApi>
   onLogout: () => void
+  workspaceVault?: WorkspaceVaultSession
 }
 
-export function AuthProvider({ children, authenticatedApi, onLogout }: AuthProviderProps) {
+export function AuthProvider({ children, authenticatedApi, onLogout, workspaceVault }: AuthProviderProps) {
   const [identity, setIdentity] = useState<{
     api: RpcStub<AuthenticatedApi>
     user: AiChatAuthorInfo
@@ -58,7 +61,7 @@ export function AuthProvider({ children, authenticatedApi, onLogout }: AuthProvi
 
   return (
     <AuthContext.Provider value={{
-      authenticatedApi, logout: onLogout, currentUser: identity?.user ?? null,
+      authenticatedApi, workspaceVault, logout: onLogout, currentUser: identity?.user ?? null,
       isCurrentUserConfirmed: identity?.api === authenticatedApi, isAdmin,
     }}>
       {children}
