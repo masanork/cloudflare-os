@@ -378,3 +378,87 @@ it("journals all planned clone names before the first clone and cleans interrupt
     expect([...ctx.storage.kv.list({ prefix: "_vault_snapshot_" })]).toEqual([]);
   });
 });
+
+async function captureScratch(name: string, seeded = true) {
+  await capture(name);
+  return runInDurableObject(env.TEST_OVERSEER.getByName(name), async (_instance, ctx) => {
+    const storage = makeOverseerStorage(ctx.storage), git = new GitStore(storage.gitObjects);
+    const commit = await git.writeFilesAsCommit(new Map([["upload.txt", "Original upload"]]), {
+      parents: [], author: { name: "Owner", email: "owner@example.test" },
+      message: "Store uploaded file", timestamp: new Date("2026-10-18T00:00:00Z"),
+    });
+    storage.gadgets.put({ type: "worktree", id: 3, chatId: 0, title: "Scratch space",
+      created: new Date("2026-10-18T00:00:00Z"),
+      baseCommit: commit, headCommit: commit, pinBase: commit });
+    storage.chatContext.put({ chatId: 0, scratch: { worktreeId: 3, bindingName: "SCRATCH" },
+      ...(seeded ? { bindings: { SCRATCH: 3, APP1: 1, EXTERNAL: 9 } } : {}),
+      workspacePrompt: "DO NOT EXPORT" });
+    return exportWorkspaceSnapshot(ctx, storage, origin);
+  });
+}
+
+it("restores attachment scratch files and their chat-private binding without exporting live context", async () => {
+  const text = await captureScratch("scratch-source");
+  expect(text).not.toContain("DO NOT EXPORT");
+  const snapshot = parseWorkspaceSnapshot(text);
+  expect(snapshot.gadgets.map(g => g.id)).toEqual([1, 2]);
+  const target = env.TEST_OVERSEER.getByName("scratch-target");
+  await target.restoreWorkspaceSnapshotForOwner(restoredOwner, text);
+  await runInDurableObject(target, async (_instance, ctx) => {
+    const storage = makeOverseerStorage(ctx.storage), scratch = storage.gadgets.get(3);
+    expect(scratch?.type).toBe("worktree");
+    if (scratch?.type !== "worktree") throw new Error("Missing scratch worktree");
+    expect(scratch.chatId).toBe(0);
+    expect(storage.gadgets.byBindingName.get("SCRATCH")).toBeUndefined();
+    expect(storage.chatContext.get(0)).toEqual({ chatId: 0,
+      scratch: { worktreeId: 3, bindingName: "SCRATCH" }, bindings: { SCRATCH: 3, APP1: 1 } });
+    expect(await new GitStore(storage.gitObjects).readCommitFiles(scratch.pinBase))
+      .toEqual(new Map([["upload.txt", "Original upload"]]));
+    const recaptured = parseWorkspaceSnapshot(await exportWorkspaceSnapshot(ctx, storage, origin));
+    expect(recaptured.gadgets.map(g => g.id)).toEqual([1, 2]);
+  });
+});
+
+it("rejects missing scratch data, cross-chat bindings and live context before staging a restore", async () => {
+  const text = await captureScratch("scratch-invalid-source");
+  for (const [name, mutate] of [
+    ["missing-context", (rows: Map<string, unknown>) => rows.delete("chatContext:a0")],
+    ["cross-chat", (rows: Map<string, unknown>) => {
+      (rows.get("gadgets:a3") as Record<string, unknown>)["chatId"] = 1;
+    }],
+    ["external-binding", (rows: Map<string, unknown>) => {
+      (rows.get("chatContext:a0") as { bindings: Record<string, number> }).bindings["EXTERNAL"] = 9;
+    }],
+    ["live-context", (rows: Map<string, unknown>) => {
+      (rows.get("chatContext:a0") as Record<string, unknown>)["spawnerConfig"] = {};
+    }],
+    ["missing-git", (rows: Map<string, unknown>) => {
+      const scratch = rows.get("gadgets:a3") as Record<string, unknown>;
+      rows.delete("gitObjects:" + scratch["pinBase"]);
+    }],
+  ] as const) {
+    const snapshot = parseWorkspaceSnapshot(text);
+    const rows = new Map(snapshot.records.map(([key, value]) => [key, decodePortable(value)]));
+    mutate(rows);
+    snapshot.records = [...rows].map(([key, value]) => [key, encodePortable(value)]);
+    const target = env.TEST_OVERSEER.getByName("invalid-scratch-" + name);
+    try {
+      await target.restoreWorkspaceSnapshotForOwner(restoredOwner, JSON.stringify(snapshot));
+      throw new Error("Expected scratch refusal");
+    } catch (error) {
+      expect(String(error)).toMatch(/scratch/i);
+      expect(String(error)).not.toContain("Expected scratch refusal");
+    }
+    await runInDurableObject(target, (_instance, ctx) => {
+      expect(makeOverseerStorage(ctx.storage).ownerId.get()).toBeUndefined();
+      expect(ctx.storage.kv.get("_vault_restore_pending")).toBeUndefined();
+    });
+  }
+});
+
+it("captures an attachment uploaded before the first agent turn seeds its chat bindings", async () => {
+  const snapshot = parseWorkspaceSnapshot(await captureScratch("scratch-unseeded", false));
+  const context = decodePortable(snapshot.records.find(([key]) => key === "chatContext:a0")![1]);
+  expect(context).toEqual({ chatId: 0, scratch: { worktreeId: 3, bindingName: "SCRATCH" },
+    bindings: { APP1: 1, APP2: 2, SCRATCH: 3 } });
+});

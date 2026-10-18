@@ -62,10 +62,13 @@ export async function startWorkspaceVaultFixture(origin: string) {
     using app = await gadget.connectToGadget() as RpcStub<NotesApp>;
     await app.putNote("Saved gadget note");
     await app.setTheme("dark");
-    const ref = await ws.uploadChatAttachment({
-      mimeType: "text/plain", name: "state.txt", content: attachment,
-    }, null);
+    const ref = { oid: await ws.uploadBlob(attachment),
+      mimeType: "text/plain", name: "state.txt" };
     const chatId = await ws.newChat(message, null, undefined, [ref]);
+    const firstMessage = (await ws.getChatHistory(chatId)).messages.find(entry => entry.type === "message");
+    assert.ok(firstMessage?.type === "message");
+    const attachmentId = firstMessage.attachments?.[0]?.id;
+    assert.ok(attachmentId);
     await ws.sendChatMessage(chatId, "Second message", null);
     const snapshot = await ws.exportWorkspaceSnapshot(origin);
     // Finish the initial sweep so a later list cannot repair a missing restore-side index update.
@@ -88,8 +91,13 @@ export async function startWorkspaceVaultFixture(origin: string) {
       const history = await reopened.getChatHistory(chatId);
       assert.deepEqual(history.messages.filter(entry => entry.type === "message")
           .map(entry => entry.message), [message, "Second message"]);
-      assert.deepEqual(Array.from(await reopened.getChatAttachmentContent(chatId, ref.id)),
+      assert.deepEqual(Array.from(await reopened.getChatAttachmentContent(chatId, attachmentId)),
           Array.from(attachment));
+      await reopened.sendChatMessage(chatId, "Resumed after restore", null);
+      assert.equal((await reopened.getChatHistory(chatId)).messages
+        .filter(entry => entry.type === "message").at(-1)?.message, "Resumed after restore");
+      assert.deepEqual(Array.from(await reopened.getChatAttachmentContent(chatId, attachmentId)),
+        Array.from(attachment));
       using restoredGadget = await reopened.getGadget(gadgetId!);
       using restoredApp = await restoredGadget.connectToGadget() as RpcStub<NotesApp>;
       assert.deepEqual(await restoredApp.readNotes(), [{ id: 1, body: "Saved gadget note" }]);
