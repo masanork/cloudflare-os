@@ -1,7 +1,7 @@
 import { RpcStub, RpcTarget, newHttpBatchRpcResponse, newWebSocketRpcSession, RpcSessionOptions } from "capnweb";
 import { validateRpc } from "capnweb-validate";
 import type { JWTPayload } from "jose";
-import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, RedactedAiModelConfig, AiGatewayInfo, AiModelProvider, ModelKind, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, UserDirectoryRecord, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, AUTH_ERROR_CODES, createAuthError, ConnectFlowStart, NotificationSubscriber } from '@gadgets/workshop-shared/api';
+import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, RedactedAiModelConfig, AiGatewayInfo, AiModelProvider, ModelKind, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, UserDirectoryRecord, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, AUTH_ERROR_CODES, createAuthError, ConnectFlowStart, NotificationSubscriber, NotificationMute } from '@gadgets/workshop-shared/api';
 import type { UiFeatureFlags } from "@gadgets/workshop-shared/feature-flags";
 import { getServerConfig } from "./deployment-config.js";
 import { isPasswordAuthEnabled, getAuthGatekeeperAllowlist } from "./auth/config.js";
@@ -16,13 +16,13 @@ import { deploymentOutputForBlueprint, listFormatOffers, readAdminConfig } from 
 
 // Re-export the optional-feature Durable Objects + entrypoints so they can be bound in wrangler.
 export { PendingLogin, LoginConnectCallbackImpl };
-import { GatekeeperUiFrame } from "@gadgets/workshop-shared/gatekeeper";
+import { GatekeeperUiFrame, GatekeeperUserSelection } from "@gadgets/workshop-shared/gatekeeper";
 import { DecisionModelGatekeeper, LanguageModelGatekeeper } from "./ai-models";
 import { getGatewayModels } from "./ai-gateway.js";
 import { AdminSettings, AdminApiImpl } from "./admin-settings.js";
 import { blueprintContentKey, buildBlueprintArchiveStream, sanitizeBlueprintOutput, parseBlueprintArchive, randomBlueprintId } from "./blueprint-archive.js";
 import { BlueprintKvRecord, listFeaturedBlueprintsFromKv, readBlueprintKvRecord } from "./storage-schema/blueprints-kv.js";
-import { GatekeeperConnectCallbackImpl, normalizeUsername, UserDurableObject, CLOUDFLARE_VENDOR_ID } from "./user";
+import { GatekeeperConnectCallbackImpl, GatekeeperUserSelectionExchangeImpl, normalizeUsername, UserDurableObject, CLOUDFLARE_VENDOR_ID } from "./user";
 import { OverseerDurableObject, GatekeeperLoopback, CodeModeTailLoopback, AgentSpawnerGatekeeper, GatekeeperHookLoopback, GadgetTailLoopback, AgentSelfLoopback } from "./overseer";
 import { UserDirectoryDurableObject } from "./user-directory.js";
 import { ExternalMessageGateway } from "./external-message-gateway";
@@ -63,7 +63,7 @@ export { AdminSettings };
 export { UserDirectoryDurableObject };
 
 // Re-export entrypoint types from user.ts.
-export { UserDurableObject, GatekeeperConnectCallbackImpl };
+export { UserDurableObject, GatekeeperConnectCallbackImpl, GatekeeperUserSelectionExchangeImpl };
 export { WorkspaceStorageInspector } from './workspace-storage';
 
 // Re-export entrypoint types from overseer.ts.
@@ -207,6 +207,10 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   subscribeToNotifications(
       subscriber: RpcStub<NotificationSubscriber>): Promise<RpcStub<{}>> {
     return this.#user.subscribeToNotifications(subscriber);
+  }
+
+  setWorkspaceNotificationMute(workspaceId: string, mute: NotificationMute | null): Promise<void> {
+    return this.#user.setWorkspaceNotificationMute(workspaceId, mute);
   }
 
   getPreferredModel(): Promise<string | null> {
@@ -658,15 +662,25 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
         }));
   }
 
-  async getGatekeeperApp(id: string): Promise<GatekeeperUiFrame | null> {
+  async getGatekeeperApp(vendorId: string): Promise<GatekeeperUiFrame | null> {
     // Self-sufficient: listProvidedAccounts provisions auto-provisioned accounts first (idempotent),
     // so a direct URL load of /gatekeepers/$id works without racing the Header's listGatekeeperApps.
     let user = this.#user;  // one stub for both calls
     let accounts = await user.listProvidedAccounts();
-    let app = accounts.find((account: (typeof accounts)[number]) => account.vendorId === id && account.description.providesUi);
+    let app = accounts.find(account => account.vendorId === vendorId && account.description.providesUi);
     if (!app) return null;
     // isAdmin is supplied fresh per open so admin-gated features reflect the user's current status.
     return user.startAccountAppUi(app.accountId, { isAdmin: this.#isAdmin() });
+  }
+
+  async createGatekeeperUserSelection(
+      vendorId: string, selectedUserId: string,
+  ): Promise<GatekeeperUserSelection | null> {
+    let selector = this.#user;
+    let accounts = await selector.listProvidedAccounts();
+    let app = accounts.find(account => account.vendorId === vendorId && account.description.providesUi);
+    if (!app) throw new Error("No such app.");
+    return selector.createGatekeeperUserSelection(app.accountId, selectedUserId);
   }
 
   // --- Deployment admin ---
