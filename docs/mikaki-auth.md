@@ -123,7 +123,14 @@ pnpm lint
 The opt-in interoperability test uses an actual Rust Mikaki Worker, isolated
 D1 databases and a Chromium virtual Passkey. It validates enrollment, first
 connection review, real code exchange/ID Token/SID checks, callback replay and
-OP-side revocation. It does not access a hosted account or a real Passkey.
+OP-side revocation. It also logs out through the real OP UI and Queue sender,
+delivers its signed Back-Channel Logout token to the actual RP receiver, and
+checks that an unexpired RP session is deleted and its SID tombstoned. A retained
+RPC capability can no longer increment a fixture counter, duplicate delivery is
+acknowledged, and the old browser session returns to sign-in. The counter is a
+minimal RPC fixture using the real session guard, rather than the full Workshop
+application. It does not access a hosted account or a real Passkey, or qualify
+hosted notification delivery.
 On the isolated `https://cfos.mikaki.org` installation, owner sign-in and
 existing workspace visibility have been checked after the domain migration.
 Managed Workers AI onboarding and a real AI response were also checked.
@@ -158,3 +165,10 @@ issuer row by its client ID and SID; do not revoke an account or change global
 policy. Keep session values private. After expiry, sign in normally rather than
 restoring an expired or revoked row, and verify that a refused write did not
 change the gadget's persisted data.
+
+On **2026-10-19**, hosted Back-Channel Logout qualification was blocked before
+Passkey sign-in by a network filter resetting the independent private-window
+login. The live receiver registration and Queue producer/consumer configuration
+were checked, but no hosted logout was performed. A repeat needs a separate test
+SSO with only Cloudflare OS attached: normal Mikaki logout also revokes the other
+applications derived from that SSO. Existing owner sessions were preserved.
