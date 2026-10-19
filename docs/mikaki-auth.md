@@ -166,9 +166,30 @@ policy. Keep session values private. After expiry, sign in normally rather than
 restoring an expired or revoked row, and verify that a refused write did not
 change the gadget's persisted data.
 
-On **2026-10-19**, hosted Back-Channel Logout qualification was blocked before
-Passkey sign-in by a network filter resetting the independent private-window
-login. The live receiver registration and Queue producer/consumer configuration
-were checked, but no hosted logout was performed. A repeat needs a separate test
-SSO with only Cloudflare OS attached: normal Mikaki logout also revokes the other
-applications derived from that SSO. Existing owner sessions were preserved.
+### Hosted signed Back-Channel Logout qualification
+
+On **2026-10-19**, Chrome/macOS passed the hosted journey using a real Passkey
+and a separate private-window SSO with only Cloudflare OS attached. After the
+synthetic restored gadget was opened, normal Mikaki logout completed through
+the OP UI. Worker telemetry confirmed a successful Queue invocation, and the
+delivery record reported `delivered`, HTTP **200**, on its first attempt.
+
+The target RP session was deleted and its SID tombstoned while **158 seconds**
+remained on its original lease. The already-open gadget returned to the sign-in
+screen without a page reload; the recorded screen still preceded the original
+lease deadline by **138 seconds**. A separate existing browser session reopened
+the same workspace and confirmed its three SQL rows and code/KV markers were
+unchanged. The other nine attached client sessions retained their previous
+revocation state, and all three other RP sessions remained present.
+
+The page had already returned to sign-in before an explicit retained gadget
+write could be attempted. Retained-counter write denial and duplicate signed
+delivery acknowledgement remain covered by the local real-OP interoperability
+test above; neither was exercised separately in this hosted run. Physical
+mobile Passkey and Vault popup behavior also remain unqualified.
+
+For a repeat, use a separate test SSO with only Cloudflare OS attached: normal
+Mikaki logout also revokes the other applications derived from that SSO. Check
+the attachment set and remaining RP lease immediately before logout, keep
+session values private, and preserve existing owner sessions. No session-policy
+or deployment change was needed for this qualification.

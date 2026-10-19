@@ -197,8 +197,11 @@ than every device/browser or snapshot size. Separate hosted
 [session failure checks](mikaki-auth.md#hosted-session-failure-qualification)
 passed issuer revocation without a notification and injected RP idle/absolute
 expiry. Existing connections stopped, an expired session could not write, and
-normal sign-in preserved the restored data. Hosted signed logout delivery and
-mobile physical-device coverage remain separate checks.
+normal sign-in preserved the restored data. On **2026-10-19**, the
+[hosted signed logout journey](mikaki-auth.md#hosted-signed-back-channel-logout-qualification)
+also passed: Queue delivery invalidated an unexpired RP session, the open page
+returned to sign-in, and the restored data and unrelated sessions were
+preserved. Mobile physical-device coverage remains a separate check.
 
 Use synthetic data in a dedicated test workspace:
 
@@ -223,6 +226,11 @@ Use synthetic data in a dedicated test workspace:
    [session failure procedure](mikaki-auth.md#hosted-session-failure-qualification).
    Confirm rejection on an existing connection and unchanged SQL after an
    expired-session write attempt. Do not change account-wide session policy.
+7. Qualify signed Back-Channel Logout using a separate SSO with only Cloudflare
+   OS attached, following the
+   [hosted logout procedure](mikaki-auth.md#hosted-signed-back-channel-logout-qualification).
+   Confirm delivery and RP invalidation before the original lease expires,
+   then verify the restored data and unrelated sessions remain intact.
 
 A new installation needs isolated storage and an explicit authentication mode.
 Follow [direct Mikaki sign-in](mikaki-auth.md) for OIDC; do not configure an
