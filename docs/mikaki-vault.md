@@ -1,5 +1,19 @@
 # Save conversations and workspaces to Mikaki Vault
 
+As of **2026-10-20**, the Vault integration is paused in the normal UI at
+`https://cfos.mikaki.org`. Its public frontend settings are recorded in
+[`deployments/mikaki-vault-preview/frontend.env`](../deployments/mikaki-vault-preview/frontend.env):
+Mikaki sign-in stays enabled and `VITE_MIKAKI_VAULT_URL` is empty, hiding both
+conversation and workspace transfer controls. Saved data and the implementation
+are retained. Separate unlock/review windows, transfer deadlines and incomplete
+physical mobile qualification prevent treating this as a seamless feature.
+The procedures below describe the experimental integration.
+
+Build this hosted frontend with `pnpm build:cfos`. That command loads the
+installation's committed `frontend.env` and overrides inherited `VITE_*` values
+for those settings before running the normal frontend build. Generic releases
+continue to use their own installation settings.
+
 The optional frontend integration adds **Save conversation to Vault** to an open
 chat. Configure build-time `VITE_MIKAKI_VAULT_URL` with an exact Mikaki `/vault`
 URL without query/fragment. The button stays hidden if unset/invalid. Use HTTPS
