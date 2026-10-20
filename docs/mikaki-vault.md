@@ -9,6 +9,11 @@ are retained. Separate unlock/review windows, transfer deadlines and incomplete
 physical mobile qualification prevent treating this as a seamless feature.
 The procedures below describe the experimental integration.
 
+Build this hosted frontend with `pnpm build:cfos`. That command loads the
+installation's committed `frontend.env` and overrides inherited `VITE_*` values
+for those settings before running the normal frontend build. Generic releases
+continue to use their own installation settings.
+
 The optional frontend integration adds **Save conversation to Vault** to an open
 chat. Configure build-time `VITE_MIKAKI_VAULT_URL` with an exact Mikaki `/vault`
 URL without query/fragment. The button stays hidden if unset/invalid. Use HTTPS
